@@ -3,7 +3,7 @@ import { DeepPartial, Repository } from 'typeorm';
 
 @Injectable()
 export class CrudService<T extends { id: string }> {
-  constructor(private readonly repository: Repository<T>) {}
+  constructor(protected readonly repository: Repository<T>) {}
 
   private hasColumn(propertyName: string): boolean {
     return this.repository.metadata.columns.some(

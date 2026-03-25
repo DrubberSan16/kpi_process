@@ -7,6 +7,7 @@ import { TimezoneInterceptor } from './common/interceptors/timezone.interceptor'
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.enableCors({ origin: true, credentials: true });
   const config = app.get(ConfigService);
 
   const port = Number(config.get('PORT') || 3000);
@@ -33,10 +34,16 @@ async function bootstrap() {
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
 
-  SwaggerModule.setup('docs', app, document, {
-    useGlobalPrefix: Boolean(globalPrefix),
-    jsonDocumentUrl: 'docs-json',
-  });
+  // ✅ Swagger SIEMPRE en /<prefix>/docs
+  const swaggerPath = globalPrefix ? `${globalPrefix}/docs` : 'docs';
+  SwaggerModule.setup(swaggerPath, app, document);
+  app.getHttpAdapter().get(
+    globalPrefix ? `/${globalPrefix}/docs-json` : '/docs-json',
+    (_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.send(document);
+    },
+  );
   app.useGlobalInterceptors(new TimezoneInterceptor());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   await app.listen(port, '127.0.0.1');
