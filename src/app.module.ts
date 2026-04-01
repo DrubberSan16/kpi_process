@@ -8,6 +8,7 @@ import { ChecklistRunItemModule } from './modules/checklist-run-item/checklist-r
 import { ChecklistTemplateModule } from './modules/checklist-template/checklist-template.module';
 import { ChecklistTemplateItemModule } from './modules/checklist-template-item/checklist-template-item.module';
 import { EquipmentModule } from './modules/equipment/equipment.module';
+import { DigitalTwinModule } from './modules/digital-twin/digital-twin.module';
 import { LocationModule } from './modules/location/location.module';
 import { MaintenancePlanModule } from './modules/maintenance-plan/maintenance-plan.module';
 import { WorkOrderModule } from './modules/work-order/work-order.module';
@@ -42,6 +43,7 @@ import { WorkOrderStatusHistoryModule } from './modules/work-order-status-histor
     ChecklistRunItemModule,
     ChecklistTemplateModule,
     ChecklistTemplateItemModule,
+    DigitalTwinModule,
     EquipmentModule,
     LocationModule,
     MaintenancePlanModule,
