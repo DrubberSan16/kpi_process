@@ -27,9 +27,46 @@ type DashboardPeriod = {
   label: string;
 };
 
+type TwinInventoryWarehouse = {
+  bodega_id: string | null;
+  codigo: string | null;
+  nombre: string | null;
+  stock_actual: number;
+  stock_min_bodega: number;
+  stock_max_bodega: number;
+  costo_promedio_bodega: number;
+  estado_stock: string;
+};
+
+type TwinMaterialRecommendation = {
+  producto_id: string | null;
+  codigo: string | null;
+  nombre: string | null;
+  consumo_total: number;
+  movimientos: number;
+  costo_referencia: number;
+  es_lubricante_esperado: boolean;
+  stock_total: number;
+  low_stock_bodegas: number;
+  stock_status: string;
+  bodega_sugerida: TwinInventoryWarehouse | null;
+  bodegas: TwinInventoryWarehouse[];
+};
+
 type TwinComputedSnapshot = {
   twin: DigitalTwin;
   period: DashboardPeriod;
+  equipment: {
+    code: string | null;
+    operational_name: string | null;
+    real_name: string | null;
+    display_name: string | null;
+    model: string | null;
+    brand_name: string | null;
+    criticidad: string | null;
+    estado_operativo: string | null;
+    codigo_lubricante: string | null;
+  };
   metrics: {
     critical_alerts: number;
     open_alerts: number;
@@ -47,6 +84,15 @@ type TwinComputedSnapshot = {
     latest_state: string;
     latest_report_date: string | null;
     latest_report_code: string | null;
+    latest_lubricant: string | null;
+    latest_lubricant_brand: string | null;
+    expected_lubricant_code: string | null;
+    match_status: string;
+  };
+  inventory: {
+    total_materials: number;
+    low_stock_materials: number;
+    recommended_materials: TwinMaterialRecommendation[];
   };
   health_score: number;
   risk_level: string;
@@ -77,6 +123,19 @@ type AiInsightPayload = {
   recommendation: string;
   priority: string;
   payload_json: Record<string, unknown>;
+};
+
+type SimilarEquipmentSuggestion = {
+  twin_id?: string | null;
+  twin_code?: string | null;
+  equipment_id?: string | null;
+  equipment_code?: string | null;
+  equipment_name?: string | null;
+  equipment_model?: string | null;
+  health_score?: number | null;
+  risk_level?: string | null;
+  operational_status?: string | null;
+  similarity_reason: string;
 };
 
 const MONTH_LABELS = [
@@ -158,11 +217,21 @@ export class DigitalTwinService {
     const code = await this.resolveDigitalTwinCode(dto.code);
     const entity = this.digitalTwinRepo.create({
       code,
-      name: String(dto.name || equipment?.nombre || equipment?.codigo || '').trim(),
+      name: String(
+        dto.name ||
+          equipment?.nombre_real ||
+          equipment?.nombre ||
+          equipment?.codigo ||
+          '',
+      ).trim(),
       equipment_id: dto.equipment_id ?? null,
       equipment_code: this.firstText(dto.equipment_code, equipment?.codigo),
-      equipment_name: this.firstText(dto.equipment_name, equipment?.nombre),
-      equipment_model: this.firstText(dto.equipment_model),
+      equipment_name: this.firstText(
+        dto.equipment_name,
+        equipment?.nombre_real,
+        equipment?.nombre,
+      ),
+      equipment_model: this.firstText(dto.equipment_model, equipment?.modelo),
       twin_type: this.firstText(dto.twin_type, 'OPERATIVO') ?? 'OPERATIVO',
       process_scope:
         this.firstText(dto.process_scope, 'MANTENIMIENTO') ?? 'MANTENIMIENTO',
@@ -193,10 +262,15 @@ export class DigitalTwinService {
     );
     current.equipment_name = this.firstText(
       dto.equipment_name,
+      equipment?.nombre_real,
       equipment?.nombre,
       current.equipment_name,
     );
-    current.equipment_model = this.firstText(dto.equipment_model, current.equipment_model);
+    current.equipment_model = this.firstText(
+      dto.equipment_model,
+      equipment?.modelo,
+      current.equipment_model,
+    );
     current.twin_type = this.firstText(dto.twin_type, current.twin_type) ?? current.twin_type;
     current.process_scope =
       this.firstText(dto.process_scope, current.process_scope) ?? current.process_scope;
@@ -235,7 +309,13 @@ export class DigitalTwinService {
 
     if (term) {
       params.push(`%${term}%`);
-      where += ` and (e.codigo ilike $1 or e.nombre ilike $1)`;
+      where += ` and (
+        e.codigo ilike $1
+        or e.nombre ilike $1
+        or coalesce(e.nombre_real, '') ilike $1
+        or coalesce(e.modelo, '') ilike $1
+        or coalesce(e.codigo_lubricante, '') ilike $1
+      )`;
     }
 
     const rows = await this.dataSource.query(
@@ -244,6 +324,9 @@ export class DigitalTwinService {
           e.id,
           e.codigo,
           e.nombre,
+          e.nombre_real,
+          e.modelo,
+          e.codigo_lubricante,
           coalesce(m.nombre, '') as marca_nombre
         from kpi_maintenance.tb_equipo e
         left join kpi_inventory.tb_marca m on m.id = e.marca_id
@@ -258,6 +341,9 @@ export class DigitalTwinService {
       id: row.id,
       codigo: row.codigo,
       nombre: row.nombre,
+      nombre_real: row.nombre_real || null,
+      modelo: row.modelo || null,
+      codigo_lubricante: row.codigo_lubricante || null,
       marca_nombre: row.marca_nombre || null,
       label: [row.codigo, row.nombre].filter(Boolean).join(' · '),
     }));
@@ -373,7 +459,18 @@ export class DigitalTwinService {
     const twin = await this.findDigitalTwinOrFail(id);
     const period = this.resolvePeriod(payload.year, payload.month);
     const snapshot = await this.buildTwinSnapshot(twin, period, true);
-    const insightPayload = await this.generateAiInsight(snapshot, payload.notes);
+    const similarEquipment = await this.findSimilarEquipment(snapshot);
+    const improvementSteps = this.buildImprovementSteps(
+      snapshot,
+      similarEquipment,
+      payload.notes,
+    );
+    const insightPayload = await this.generateAiInsight(
+      snapshot,
+      payload.notes,
+      similarEquipment,
+      improvementSteps,
+    );
 
     const insight = await this.digitalTwinInsightRepo.save(
       this.digitalTwinInsightRepo.create({
@@ -425,8 +522,35 @@ export class DigitalTwinService {
     persist = false,
   ): Promise<TwinComputedSnapshot> {
     const equipmentId = twin.equipment_id ?? null;
-    const equipmentCode = String(twin.equipment_code || '').trim() || null;
+    const equipmentContext = equipmentId
+      ? await this.resolveEquipmentReference(equipmentId)
+      : null;
+    const equipmentCode =
+      this.firstText(twin.equipment_code, equipmentContext?.codigo) ?? null;
     const currentHours = await this.queryCurrentEquipmentHours(equipmentId);
+    const equipment = {
+      code: equipmentCode,
+      operational_name: this.firstText(
+        equipmentContext?.nombre,
+        twin.equipment_name,
+      ),
+      real_name: this.firstText(equipmentContext?.nombre_real),
+      display_name:
+        this.firstText(
+          equipmentContext?.nombre_real,
+          twin.equipment_name,
+          equipmentContext?.nombre,
+        ) ?? null,
+      model:
+        this.firstText(
+          twin.equipment_model,
+          equipmentContext?.modelo,
+        ) ?? null,
+      brand_name: this.firstText(equipmentContext?.marca_nombre),
+      criticidad: this.firstText(equipmentContext?.criticidad),
+      estado_operativo: this.firstText(equipmentContext?.estado_operativo),
+      codigo_lubricante: this.firstText(equipmentContext?.codigo_lubricante),
+    };
 
     const [
       alertsRow,
@@ -436,6 +560,7 @@ export class DigitalTwinService {
       lubricantRow,
       dailyRow,
       overdueRow,
+      recommendedMaterials,
     ] = await Promise.all([
       this.queryAlertMetrics(equipmentId, equipmentCode, period),
       this.queryWorkOrderMetrics(equipmentId, period),
@@ -444,6 +569,10 @@ export class DigitalTwinService {
       this.queryLubricantMetrics(equipmentId, equipmentCode, period),
       this.queryDailyReportMetrics(equipmentId, equipmentCode, period),
       this.queryOverdueProgramaciones(equipmentId, period, currentHours),
+      this.queryMaterialRecommendations(
+        equipmentId,
+        equipment.codigo_lubricante,
+      ),
     ]);
 
     const metrics = {
@@ -463,11 +592,41 @@ export class DigitalTwinService {
     const lubricantState = String(
       lubricantRow?.latest_state || 'SIN_ANALISIS',
     ).toUpperCase();
+    const lubricantMatchStatus = this.resolveLubricantMatchStatus(
+      equipment.codigo_lubricante,
+      lubricantRow?.latest_lubricant,
+    );
     const lubricantPenalty =
       lubricantState === 'ALERTA' || lubricantState === 'ANORMAL'
         ? 20
         : lubricantState === 'OBSERVACION' || lubricantState === 'PRECAUCION'
           ? 10
+          : 0;
+    const equipmentStatePenalty =
+      equipment.estado_operativo === 'CORRECTIVO' ||
+      equipment.estado_operativo === 'BLOQUEADA'
+        ? 15
+        : equipment.estado_operativo === 'MPG' ||
+            equipment.estado_operativo === 'RESERVA'
+          ? 6
+          : 0;
+    const lubricantMatchPenalty =
+      lubricantMatchStatus === 'NO_COINCIDE'
+        ? 10
+        : lubricantMatchStatus === 'SIN_REFERENCIA'
+          ? 3
+          : 0;
+    const lowStockMaterials = recommendedMaterials.filter(
+      (item) => item.stock_status !== 'DISPONIBLE',
+    ).length;
+    const inventoryPenalty =
+      recommendedMaterials.some(
+        (item) =>
+          item.es_lubricante_esperado && item.stock_status !== 'DISPONIBLE',
+      )
+        ? 12
+        : lowStockMaterials > 0
+          ? Math.min(8, lowStockMaterials * 2)
           : 0;
 
     let healthScore =
@@ -476,7 +635,10 @@ export class DigitalTwinService {
       metrics.open_alerts * 4 -
       metrics.open_work_orders * 5 -
       metrics.overdue_programaciones * 10 -
-      lubricantPenalty;
+      lubricantPenalty -
+      equipmentStatePenalty -
+      lubricantMatchPenalty -
+      inventoryPenalty;
 
     if (
       metrics.daily_report_count === 0 &&
@@ -490,29 +652,41 @@ export class DigitalTwinService {
     const riskLevel =
       metrics.critical_alerts > 0 ||
       metrics.overdue_programaciones > 0 ||
+      equipmentStatePenalty >= 15 ||
       healthScore < 50
         ? 'ALTO'
         : metrics.open_alerts > 0 ||
             metrics.open_work_orders > 0 ||
             lubricantPenalty > 0 ||
+            lubricantMatchPenalty > 0 ||
+            inventoryPenalty > 0 ||
             healthScore < 75
           ? 'MEDIO'
           : 'BAJO';
 
     const operationalStatus =
-      metrics.critical_alerts > 0 || metrics.overdue_programaciones > 0
+      metrics.critical_alerts > 0 ||
+      metrics.overdue_programaciones > 0 ||
+      equipmentStatePenalty >= 15
         ? 'CRITICO'
-        : lubricantPenalty > 0 || metrics.open_work_orders > 0
+        : lubricantPenalty > 0 ||
+            metrics.open_work_orders > 0 ||
+            inventoryPenalty > 0 ||
+            lubricantMatchPenalty > 0 ||
+            equipmentStatePenalty > 0
           ? 'EN_OBSERVACION'
           : 'ESTABLE';
 
     const signals = [
       { key: 'SALUD', label: 'Salud del gemelo', category: 'SALUD', value: healthScore, unit: '%', reference_value: 85, severity: healthScore < 50 ? 'CRITICAL' : healthScore < 75 ? 'WARNING' : 'INFO', helper: 'Puntaje integral del periodo' },
+      { key: 'ESTADO_EQUIPO', label: 'Estado operativo del equipo', category: 'EQUIPO', value: equipmentStatePenalty >= 15 ? 100 : equipmentStatePenalty > 0 ? 55 : 15, reference_value: 15, severity: equipmentStatePenalty >= 15 ? 'CRITICAL' : equipmentStatePenalty > 0 ? 'WARNING' : 'INFO', helper: `Estado actual: ${equipment.estado_operativo || 'NO DEFINIDO'} · Criticidad ${equipment.criticidad || 'NO DEFINIDA'}` },
       { key: 'ALERTAS_CRITICAS', label: 'Alertas críticas', category: 'ALERTAS', value: metrics.critical_alerts, severity: metrics.critical_alerts > 0 ? 'CRITICAL' : 'INFO', helper: 'Alertas críticas o abiertas del equipo' },
       { key: 'OT_ABIERTAS', label: 'Órdenes abiertas', category: 'MANTENIMIENTO', value: metrics.open_work_orders, severity: metrics.open_work_orders > 0 ? 'WARNING' : 'INFO', helper: 'OT pendientes o en proceso' },
       { key: 'HORAS_PROGRAMADAS', label: 'Horas programadas mensuales', category: 'PLANIFICACION', value: metrics.planned_hours_month, unit: 'h', severity: metrics.planned_hours_month > 0 ? 'INFO' : 'WARNING', helper: 'Carga total programada en mensual' },
       { key: 'ACTIVIDADES_SEMANALES', label: 'Actividades semanales', category: 'PLANIFICACION', value: metrics.weekly_activity_count, reference_value: metrics.weekly_hours, severity: metrics.weekly_activity_count > 0 ? 'INFO' : 'WARNING', helper: 'Bloques y detalle de cronograma semanal' },
       { key: 'LUBRICANTE', label: 'Condición de lubricante', category: 'PREDICTIVO', value: lubricantState === 'ALERTA' || lubricantState === 'ANORMAL' ? 100 : lubricantState === 'OBSERVACION' || lubricantState === 'PRECAUCION' ? 65 : lubricantState === 'NORMAL' ? 20 : 0, reference_value: 20, severity: lubricantState === 'ALERTA' || lubricantState === 'ANORMAL' ? 'CRITICAL' : lubricantState === 'OBSERVACION' || lubricantState === 'PRECAUCION' ? 'WARNING' : 'INFO', helper: `Último estado: ${lubricantState}` },
+      { key: 'MATCH_LUBRICANTE', label: 'Coincidencia de lubricante', category: 'PREDICTIVO', value: lubricantMatchStatus === 'NO_COINCIDE' ? 100 : lubricantMatchStatus === 'SIN_REFERENCIA' ? 45 : 10, reference_value: 10, severity: lubricantMatchStatus === 'NO_COINCIDE' ? 'CRITICAL' : lubricantMatchStatus === 'SIN_REFERENCIA' ? 'WARNING' : 'INFO', helper: `Esperado: ${equipment.codigo_lubricante || 'No definido'} · Analizado: ${this.firstText(lubricantRow?.latest_lubricant) || 'Sin análisis'}` },
+      { key: 'INVENTARIO_MATERIALES', label: 'Disponibilidad de materiales', category: 'INVENTARIO', value: lowStockMaterials, reference_value: recommendedMaterials.length, severity: recommendedMaterials.some((item) => item.es_lubricante_esperado && item.stock_status !== 'DISPONIBLE') ? 'CRITICAL' : lowStockMaterials > 0 ? 'WARNING' : 'INFO', helper: `${lowStockMaterials} materiales sugeridos con stock comprometido en bodega` },
       { key: 'REPORTES_DIARIOS', label: 'Reportes diarios', category: 'OPERACION', value: metrics.daily_report_count, reference_value: metrics.operation_hours, severity: metrics.daily_report_count === 0 ? 'WARNING' : 'INFO', helper: 'Reportes operativos diarios asociados al equipo' },
       { key: 'PROGRAMACIONES_VENCIDAS', label: 'Programaciones vencidas', category: 'PLANIFICACION', value: metrics.overdue_programaciones, severity: metrics.overdue_programaciones > 0 ? 'CRITICAL' : 'INFO', helper: 'Programaciones que ya debieron ejecutarse' },
     ];
@@ -522,16 +696,29 @@ export class DigitalTwinService {
       { key: 'risk_level', label: 'Riesgo', value: riskLevel, helper: 'Clasificación operativa del riesgo', color: riskLevel === 'ALTO' ? 'error' : riskLevel === 'MEDIO' ? 'warning' : 'success' },
       { key: 'planned_hours', label: 'Horas programadas', value: metrics.planned_hours_month, helper: 'Mensual', color: 'info' },
       { key: 'weekly_activity_count', label: 'Actividades', value: metrics.weekly_activity_count, helper: 'Cronograma semanal', color: 'secondary' },
+      { key: 'recommended_materials', label: 'Materiales sugeridos', value: recommendedMaterials.length, helper: `${lowStockMaterials} con stock comprometido`, color: lowStockMaterials > 0 ? 'warning' : 'success' },
     ];
 
     const snapshot: TwinComputedSnapshot = {
       twin,
       period,
+      equipment,
       metrics,
       lubricant: {
         latest_state: lubricantState,
         latest_report_date: lubricantRow?.latest_report_date || null,
         latest_report_code: lubricantRow?.latest_report_code || null,
+        latest_lubricant: this.firstText(lubricantRow?.latest_lubricant),
+        latest_lubricant_brand: this.firstText(
+          lubricantRow?.latest_lubricant_brand,
+        ),
+        expected_lubricant_code: equipment.codigo_lubricante,
+        match_status: lubricantMatchStatus,
+      },
+      inventory: {
+        total_materials: recommendedMaterials.length,
+        low_stock_materials: lowStockMaterials,
+        recommended_materials: recommendedMaterials,
       },
       health_score: healthScore,
       risk_level: riskLevel,
@@ -549,14 +736,21 @@ export class DigitalTwinService {
 
   private async persistSnapshot(snapshot: TwinComputedSnapshot) {
     const twin = snapshot.twin;
+    twin.equipment_code = snapshot.equipment.code ?? twin.equipment_code ?? null;
+    twin.equipment_name =
+      snapshot.equipment.display_name ?? twin.equipment_name ?? null;
+    twin.equipment_model =
+      snapshot.equipment.model ?? twin.equipment_model ?? null;
     twin.health_score = snapshot.health_score;
     twin.risk_level = snapshot.risk_level;
     twin.operational_status = snapshot.operational_status;
     twin.last_snapshot_at = new Date();
     twin.snapshot_json = {
       period: snapshot.period,
+      equipment: snapshot.equipment,
       metrics: snapshot.metrics,
       lubricant: snapshot.lubricant,
+      inventory: snapshot.inventory,
       kpis: snapshot.kpis,
     };
     twin.updated_at = new Date();
@@ -593,13 +787,21 @@ export class DigitalTwinService {
   private async generateAiInsight(
     snapshot: TwinComputedSnapshot,
     notes?: string,
+    similarEquipment?: SimilarEquipmentSuggestion | null,
+    improvementSteps: string[] = [],
   ): Promise<AiInsightPayload> {
     const apiKey = String(
       this.configService.get('DIGITAL_TWIN_AI_API_KEY') || '',
     ).trim();
 
     if (!snapshot.twin.ai_enabled || !apiKey) {
-      return this.buildFallbackInsight(snapshot, notes, 'SYSTEM_RULES');
+      return this.buildFallbackInsight(
+        snapshot,
+        notes,
+        'SYSTEM_RULES',
+        similarEquipment,
+        improvementSteps,
+      );
     }
 
     const baseUrl = String(
@@ -626,6 +828,7 @@ export class DigitalTwinService {
         body: JSON.stringify({
           model,
           temperature: 0.2,
+          response_format: { type: 'json_object' },
           messages: [
             {
               role: 'system',
@@ -644,12 +847,16 @@ export class DigitalTwinService {
                     equipment_model: snapshot.twin.equipment_model,
                   },
                   period: snapshot.period,
+                  equipment: snapshot.equipment,
                   health_score: snapshot.health_score,
                   risk_level: snapshot.risk_level,
                   operational_status: snapshot.operational_status,
                   lubricant: snapshot.lubricant,
+                  inventory: snapshot.inventory,
                   metrics: snapshot.metrics,
                   signals: snapshot.signals,
+                  similar_equipment: similarEquipment,
+                  suggested_steps: improvementSteps,
                   notes: notes ?? null,
                 },
                 null,
@@ -675,6 +882,15 @@ export class DigitalTwinService {
         throw new Error('AI response was not valid JSON');
       }
 
+      const resolvedSimilarEquipment = this.resolveSimilarEquipmentPayload(
+        (parsed as Record<string, unknown>).similar_equipment,
+        similarEquipment,
+      );
+      const resolvedImprovementSteps = this.resolveImprovementStepsPayload(
+        (parsed as Record<string, unknown>).improvement_steps,
+        improvementSteps,
+      );
+
       return {
         source: 'AI',
         title:
@@ -693,11 +909,22 @@ export class DigitalTwinService {
           provider: 'openai-compatible',
           model,
           notes: notes ?? null,
+          equipment: snapshot.equipment,
+          inventory: snapshot.inventory,
+          recommended_materials: snapshot.inventory.recommended_materials,
+          similar_equipment: resolvedSimilarEquipment,
+          improvement_steps: resolvedImprovementSteps,
           raw: rawContent,
         },
       };
     } catch {
-      return this.buildFallbackInsight(snapshot, notes, 'SYSTEM_FALLBACK');
+      return this.buildFallbackInsight(
+        snapshot,
+        notes,
+        'SYSTEM_FALLBACK',
+        similarEquipment,
+        improvementSteps,
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -707,12 +934,19 @@ export class DigitalTwinService {
     snapshot: TwinComputedSnapshot,
     notes: string | undefined,
     source: string,
+    similarEquipment?: SimilarEquipmentSuggestion | null,
+    improvementSteps: string[] = [],
   ): AiInsightPayload {
     const hasCriticalCondition =
       snapshot.metrics.critical_alerts > 0 ||
       snapshot.metrics.overdue_programaciones > 0 ||
       snapshot.lubricant.latest_state === 'ALERTA' ||
-      snapshot.lubricant.latest_state === 'ANORMAL';
+      snapshot.lubricant.latest_state === 'ANORMAL' ||
+      snapshot.lubricant.match_status === 'NO_COINCIDE' ||
+      snapshot.inventory.recommended_materials.some(
+        (item) =>
+          item.es_lubricante_esperado && item.stock_status !== 'DISPONIBLE',
+      );
 
     const title = hasCriticalCondition
       ? `Intervención prioritaria para ${snapshot.twin.equipment_code || snapshot.twin.code}`
@@ -726,6 +960,10 @@ export class DigitalTwinService {
       ? `Prioriza atención sobre el equipo, revisa lubricación (${snapshot.lubricant.latest_state}), cierra OT abiertas (${snapshot.metrics.open_work_orders}) y reprograma ${snapshot.metrics.overdue_programaciones} mantenimientos vencidos.`
       : `Mantén el monitoreo del equipo, confirma la ejecución de ${snapshot.metrics.weekly_activity_count} actividades semanales y consolida ${snapshot.metrics.planned_hours_month} horas planificadas del mes.`;
 
+    const resolvedSteps = improvementSteps.length
+      ? improvementSteps
+      : this.buildImprovementSteps(snapshot, similarEquipment, notes);
+
     return {
       source,
       title,
@@ -737,8 +975,297 @@ export class DigitalTwinService {
       payload_json: {
         generated_with: source,
         notes: notes ?? null,
+        equipment: snapshot.equipment,
+        inventory: snapshot.inventory,
+        recommended_materials: snapshot.inventory.recommended_materials,
+        similar_equipment: similarEquipment ?? null,
+        improvement_steps: resolvedSteps,
       },
     };
+  }
+
+  private async findSimilarEquipment(
+    snapshot: TwinComputedSnapshot,
+  ): Promise<SimilarEquipmentSuggestion | null> {
+    const equipmentId = snapshot.twin.equipment_id ?? null;
+    const equipmentCode = this.firstText(snapshot.equipment.code);
+    const equipmentModel = this.firstText(snapshot.equipment.model);
+    const realName = this.firstText(snapshot.equipment.real_name);
+    const lubricantCode = this.firstText(snapshot.equipment.codigo_lubricante);
+
+    const candidateFromEquipment = this.firstRow(
+      await this.dataSource.query(
+        `
+          with current_equipment as (
+            select e.id, e.codigo, e.nombre, e.nombre_real, e.equipo_tipo_id, e.marca_id, e.modelo, e.codigo_lubricante, e.estado_operativo
+            from kpi_maintenance.tb_equipo e
+            where e.is_deleted = false
+              and (
+                ($1::uuid is not null and e.id = $1::uuid)
+                or ($2::text is not null and upper(e.codigo) = upper($2::text))
+              )
+            limit 1
+          )
+          select
+            dt.id as twin_id,
+            dt.code as twin_code,
+            e.id as equipment_id,
+            e.codigo as equipment_code,
+            coalesce(e.nombre_real, e.nombre) as equipment_name,
+            coalesce(e.modelo, dt.equipment_model, $3::text, '') as equipment_model,
+            dt.health_score,
+            dt.risk_level,
+            dt.operational_status,
+            case
+              when $3::text is not null and trim($3::text) <> '' and upper(coalesce(e.modelo, dt.equipment_model, '')) = upper($3::text)
+                and $5::text is not null and trim($5::text) <> '' and upper(coalesce(e.codigo_lubricante, '')) = upper($5::text) then 'Mismo modelo y código de lubricante'
+              when $3::text is not null and trim($3::text) <> '' and upper(coalesce(e.modelo, dt.equipment_model, '')) = upper($3::text) then 'Mismo modelo operativo'
+              when $4::text is not null and trim($4::text) <> '' and upper(coalesce(e.nombre_real, e.nombre, '')) = upper($4::text) then 'Mismo nombre real de referencia'
+              when e.equipo_tipo_id = ce.equipo_tipo_id and e.marca_id = ce.marca_id then 'Mismo tipo y marca'
+              when e.equipo_tipo_id = ce.equipo_tipo_id then 'Mismo tipo de equipo'
+              else 'Equipo comparable por operación'
+            end as similarity_reason
+          from current_equipment ce
+          inner join kpi_maintenance.tb_equipo e
+            on e.is_deleted = false
+           and e.id <> ce.id
+          left join kpi_process.tb_digital_twin dt
+            on dt.equipment_id = e.id
+           and dt.is_deleted = false
+           and upper(coalesce(dt.status, 'ACTIVE')) = 'ACTIVE'
+          where
+            (
+              ($3::text is not null and trim($3::text) <> '' and upper(coalesce(e.modelo, dt.equipment_model, '')) = upper($3::text))
+              or ($5::text is not null and trim($5::text) <> '' and upper(coalesce(e.codigo_lubricante, '')) = upper($5::text))
+              or e.equipo_tipo_id = ce.equipo_tipo_id
+            )
+          order by
+            case when $3::text is not null and trim($3::text) <> '' and upper(coalesce(e.modelo, dt.equipment_model, '')) = upper($3::text) then 0 else 1 end,
+            case when $5::text is not null and trim($5::text) <> '' and upper(coalesce(e.codigo_lubricante, '')) = upper($5::text) then 0 else 1 end,
+            case when e.marca_id = ce.marca_id then 0 else 1 end,
+            case when dt.id is not null then 0 else 1 end,
+            coalesce(dt.health_score, 0) desc,
+            e.codigo asc
+          limit 1
+        `,
+        [equipmentId, equipmentCode, equipmentModel, realName, lubricantCode],
+      ),
+    );
+
+    if (candidateFromEquipment) {
+      return {
+        twin_id: candidateFromEquipment.twin_id ?? null,
+        twin_code: candidateFromEquipment.twin_code ?? null,
+        equipment_id: candidateFromEquipment.equipment_id ?? null,
+        equipment_code: candidateFromEquipment.equipment_code ?? null,
+        equipment_name: candidateFromEquipment.equipment_name ?? null,
+        equipment_model: candidateFromEquipment.equipment_model ?? null,
+        health_score:
+          candidateFromEquipment.health_score != null
+            ? this.toNumber(candidateFromEquipment.health_score)
+            : null,
+        risk_level: candidateFromEquipment.risk_level ?? null,
+        operational_status: candidateFromEquipment.operational_status ?? null,
+        similarity_reason:
+          this.firstText(candidateFromEquipment.similarity_reason) ??
+          'Equipo comparable por operación',
+      };
+    }
+
+    if (!equipmentModel) {
+      return null;
+    }
+
+    const candidateFromTwins = this.firstRow(
+      await this.dataSource.query(
+        `
+          select
+            dt.id as twin_id,
+            dt.code as twin_code,
+            dt.equipment_id,
+            dt.equipment_code,
+            dt.equipment_name,
+            dt.equipment_model,
+            dt.health_score,
+            dt.risk_level,
+            dt.operational_status
+          from kpi_process.tb_digital_twin dt
+          where dt.is_deleted = false
+            and dt.id <> $1::uuid
+            and upper(coalesce(dt.equipment_model, '')) = upper($2::text)
+          order by dt.health_score desc, dt.updated_at desc
+          limit 1
+        `,
+        [snapshot.twin.id, equipmentModel],
+      ),
+    );
+
+    if (!candidateFromTwins) {
+      return null;
+    }
+
+    return {
+      twin_id: candidateFromTwins.twin_id ?? null,
+      twin_code: candidateFromTwins.twin_code ?? null,
+      equipment_id: candidateFromTwins.equipment_id ?? null,
+      equipment_code: candidateFromTwins.equipment_code ?? null,
+      equipment_name: candidateFromTwins.equipment_name ?? null,
+      equipment_model: candidateFromTwins.equipment_model ?? null,
+      health_score:
+        candidateFromTwins.health_score != null
+          ? this.toNumber(candidateFromTwins.health_score)
+          : null,
+      risk_level: candidateFromTwins.risk_level ?? null,
+      operational_status: candidateFromTwins.operational_status ?? null,
+      similarity_reason: 'Mismo modelo operativo',
+    };
+  }
+
+  private buildImprovementSteps(
+    snapshot: TwinComputedSnapshot,
+    similarEquipment?: SimilarEquipmentSuggestion | null,
+    notes?: string,
+  ) {
+    const steps: string[] = [];
+
+    if (snapshot.metrics.critical_alerts > 0) {
+      steps.push(
+        `Atender ${snapshot.metrics.critical_alerts} alertas críticas activas y priorizar su cierre operativo.`,
+      );
+    }
+
+    if (snapshot.metrics.overdue_programaciones > 0) {
+      steps.push(
+        `Regularizar ${snapshot.metrics.overdue_programaciones} programaciones vencidas y replanificar su ejecución inmediata.`,
+      );
+    }
+
+    if (snapshot.metrics.open_work_orders > 0) {
+      steps.push(
+        `Revisar y cerrar ${snapshot.metrics.open_work_orders} órdenes de trabajo abiertas para estabilizar el equipo.`,
+      );
+    }
+
+    if (
+      snapshot.lubricant.latest_state === 'ALERTA' ||
+      snapshot.lubricant.latest_state === 'ANORMAL' ||
+      snapshot.lubricant.latest_state === 'PRECAUCION' ||
+      snapshot.lubricant.latest_state === 'OBSERVACION'
+    ) {
+      steps.push(
+        `Ejecutar revisión predictiva del sistema de lubricación; último estado reportado: ${snapshot.lubricant.latest_state}.`,
+      );
+    }
+
+    if (snapshot.lubricant.match_status === 'NO_COINCIDE') {
+      steps.push(
+        `Verificar el lubricante aplicado. El equipo espera ${snapshot.lubricant.expected_lubricant_code || 'un código definido'} y el último análisis reporta ${snapshot.lubricant.latest_lubricant || 'otro lubricante'}.`,
+      );
+    }
+
+    if (snapshot.inventory.low_stock_materials > 0) {
+      const suggested = snapshot.inventory.recommended_materials
+        .filter((item) => item.stock_status !== 'DISPONIBLE')
+        .slice(0, 2)
+        .map((item) =>
+          [item.codigo, item.nombre, item.bodega_sugerida?.codigo || item.bodega_sugerida?.nombre]
+            .filter(Boolean)
+            .join(' · '),
+        );
+      steps.push(
+        `Asegurar abastecimiento de materiales críticos${suggested.length ? `: ${suggested.join('; ')}` : ''}.`,
+      );
+    }
+
+    if (
+      snapshot.metrics.daily_report_count === 0 &&
+      (snapshot.metrics.planned_hours_month > 0 ||
+        snapshot.metrics.weekly_activity_count > 0)
+    ) {
+      steps.push(
+        'Validar la captura de reportes diarios de operación para asegurar trazabilidad del período.',
+      );
+    }
+
+    if (snapshot.metrics.planned_hours_month > snapshot.metrics.operation_hours) {
+      steps.push(
+        `Alinear la ejecución real con las ${snapshot.metrics.planned_hours_month} horas programadas del mes y verificar desviaciones.`,
+      );
+    }
+
+    if (similarEquipment?.equipment_code || similarEquipment?.equipment_name) {
+      const target = [
+        similarEquipment.equipment_code,
+        similarEquipment.equipment_name,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      steps.push(
+        `Comparar estrategia operativa y mantenimiento con ${target} para replicar prácticas que mejoren salud y disponibilidad.`,
+      );
+    }
+
+    if (notes) {
+      steps.push(`Considerar la observación del usuario al ejecutar mejoras: ${notes}.`);
+    }
+
+    return Array.from(new Set(steps)).filter(Boolean).slice(0, 6);
+  }
+
+  private resolveSimilarEquipmentPayload(
+    value: unknown,
+    fallback?: SimilarEquipmentSuggestion | null,
+  ): SimilarEquipmentSuggestion | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return fallback ?? null;
+    }
+
+    const payload = value as Record<string, unknown>;
+    const equipmentCode = this.firstText(payload.equipment_code);
+    const equipmentName = this.firstText(payload.equipment_name);
+
+    if (!equipmentCode && !equipmentName) {
+      return fallback ?? null;
+    }
+
+    return {
+      twin_id: this.firstText(payload.twin_id, fallback?.twin_id),
+      twin_code: this.firstText(payload.twin_code, fallback?.twin_code),
+      equipment_id: this.firstText(payload.equipment_id, fallback?.equipment_id),
+      equipment_code: this.firstText(equipmentCode, fallback?.equipment_code),
+      equipment_name: this.firstText(equipmentName, fallback?.equipment_name),
+      equipment_model: this.firstText(
+        payload.equipment_model,
+        fallback?.equipment_model,
+      ),
+      health_score:
+        payload.health_score != null
+          ? this.toNumber(payload.health_score)
+          : fallback?.health_score ?? null,
+      risk_level: this.firstText(payload.risk_level, fallback?.risk_level),
+      operational_status: this.firstText(
+        payload.operational_status,
+        fallback?.operational_status,
+      ),
+      similarity_reason:
+        this.firstText(payload.similarity_reason, fallback?.similarity_reason) ??
+        'Equipo comparable por operación',
+    };
+  }
+
+  private resolveImprovementStepsPayload(
+    value: unknown,
+    fallback: string[] = [],
+  ) {
+    if (!Array.isArray(value)) {
+      return fallback;
+    }
+
+    const normalized = value
+      .map((item) => this.firstText(item))
+      .filter((item): item is string => Boolean(item));
+
+    return normalized.length ? normalized : fallback;
   }
 
   private resolvePeriod(year?: number, month?: number): DashboardPeriod {
@@ -801,8 +1328,18 @@ export class DigitalTwinService {
     if (!normalized) return null;
     const rows = await this.dataSource.query(
       `
-        select e.id, e.codigo, e.nombre
+        select
+          e.id,
+          e.codigo,
+          e.nombre,
+          e.nombre_real,
+          e.modelo,
+          e.codigo_lubricante,
+          e.criticidad,
+          e.estado_operativo,
+          coalesce(m.nombre, '') as marca_nombre
         from kpi_maintenance.tb_equipo e
+        left join kpi_inventory.tb_marca m on m.id = e.marca_id
         where e.id = $1 and e.is_deleted = false
         limit 1
       `,
@@ -972,7 +1509,9 @@ export class DigitalTwinService {
             (select count(*) from filtered where coalesce(fecha_reporte, fecha_muestra) between $4 and $3) as sample_count,
             coalesce((select estado_diagnostico from latest), 'SIN_ANALISIS') as latest_state,
             (select coalesce(fecha_reporte, fecha_muestra)::text from latest) as latest_report_date,
-            (select codigo from latest) as latest_report_code
+            (select codigo from latest) as latest_report_code,
+            (select lubricante from latest) as latest_lubricant,
+            (select marca_lubricante from latest) as latest_lubricant_brand
         `,
         [equipmentId, equipmentCode, period.endDate, period.startDate],
       ),
@@ -1031,6 +1570,220 @@ export class DigitalTwinService {
     );
   }
 
+  private resolveLubricantMatchStatus(
+    expectedLubricantCode?: unknown,
+    actualLubricant?: unknown,
+  ) {
+    const expected = this.normalizeToken(expectedLubricantCode);
+    const actual = this.normalizeToken(actualLubricant);
+    if (!expected) return 'SIN_REFERENCIA';
+    if (!actual) return 'SIN_ANALISIS';
+    if (expected === actual || expected.includes(actual) || actual.includes(expected)) {
+      return 'COINCIDE';
+    }
+    return 'NO_COINCIDE';
+  }
+
+  private async queryMaterialRecommendations(
+    equipmentId: string | null,
+    expectedLubricantCode?: string | null,
+  ): Promise<TwinMaterialRecommendation[]> {
+    const materialMap = new Map<
+      string,
+      {
+        producto_id: string | null;
+        codigo: string | null;
+        nombre: string | null;
+        consumo_total: number;
+        movimientos: number;
+        costo_referencia: number;
+        es_lubricante_esperado: boolean;
+      }
+    >();
+
+    if (equipmentId) {
+      const usageRows = await this.dataSource.query(
+        `
+          select
+            p.id as producto_id,
+            p.codigo,
+            p.nombre,
+            coalesce(sum(cr.cantidad), 0) as consumo_total,
+            count(*) as movimientos,
+            coalesce(max(cr.costo_unitario), 0) as costo_referencia
+          from kpi_maintenance.tb_consumo_repuesto cr
+          inner join kpi_process.tb_work_order wo
+            on wo.id = cr.work_order_id
+           and wo.is_deleted = false
+          inner join kpi_inventory.tb_producto p
+            on p.id = cr.producto_id
+           and p.is_deleted = false
+          where cr.is_deleted = false
+            and wo.equipment_id = $1::uuid
+          group by p.id, p.codigo, p.nombre
+          order by coalesce(sum(cr.cantidad), 0) desc, count(*) desc, p.nombre asc
+          limit 8
+        `,
+        [equipmentId],
+      );
+
+      for (const row of usageRows) {
+        materialMap.set(String(row.producto_id), {
+          producto_id: row.producto_id ?? null,
+          codigo: this.firstText(row.codigo),
+          nombre: this.firstText(row.nombre),
+          consumo_total: this.toNumber(row.consumo_total),
+          movimientos: this.toNumber(row.movimientos),
+          costo_referencia: this.toNumber(row.costo_referencia),
+          es_lubricante_esperado: false,
+        });
+      }
+    }
+
+    const expectedLubricant = this.firstText(expectedLubricantCode);
+    if (expectedLubricant) {
+      const lubricantRows = await this.dataSource.query(
+        `
+          select
+            p.id as producto_id,
+            p.codigo,
+            p.nombre,
+            coalesce(p.costo_promedio, 0) as costo_referencia
+          from kpi_inventory.tb_producto p
+          where p.is_deleted = false
+            and (
+              upper(coalesce(p.codigo, '')) = upper($1::text)
+              or upper(coalesce(p.nombre, '')) like ('%' || upper($1::text) || '%')
+            )
+          order by
+            case when upper(coalesce(p.codigo, '')) = upper($1::text) then 0 else 1 end,
+            p.nombre asc
+          limit 5
+        `,
+        [expectedLubricant],
+      );
+
+      for (const row of lubricantRows) {
+        const key = String(row.producto_id);
+        const current = materialMap.get(key);
+        materialMap.set(key, {
+          producto_id: row.producto_id ?? null,
+          codigo: this.firstText(row.codigo),
+          nombre: this.firstText(row.nombre),
+          consumo_total: current?.consumo_total ?? 0,
+          movimientos: current?.movimientos ?? 0,
+          costo_referencia: current?.costo_referencia ?? this.toNumber(row.costo_referencia),
+          es_lubricante_esperado: true,
+        });
+      }
+    }
+
+    const materials = Array.from(materialMap.values());
+    if (!materials.length) {
+      return [];
+    }
+
+    const productIds = materials
+      .map((item) => item.producto_id)
+      .filter((item): item is string => Boolean(item));
+
+    const stockRows = await this.dataSource.query(
+      `
+        select
+          sb.producto_id,
+          sb.bodega_id,
+          b.codigo as bodega_codigo,
+          b.nombre as bodega_nombre,
+          coalesce(sb.stock_actual, 0) as stock_actual,
+          coalesce(sb.stock_min_bodega, 0) as stock_min_bodega,
+          coalesce(sb.stock_max_bodega, 0) as stock_max_bodega,
+          coalesce(sb.costo_promedio_bodega, 0) as costo_promedio_bodega
+        from kpi_inventory.tb_stock_bodega sb
+        inner join kpi_inventory.tb_bodega b
+          on b.id = sb.bodega_id
+         and b.is_deleted = false
+        where sb.is_deleted = false
+          and sb.producto_id = any($1::uuid[])
+      `,
+      [productIds],
+    );
+
+    const stockByProduct = new Map<string, TwinInventoryWarehouse[]>();
+
+    for (const row of stockRows) {
+      const productId = String(row.producto_id);
+      const warehouse: TwinInventoryWarehouse = {
+        bodega_id: row.bodega_id ?? null,
+        codigo: this.firstText(row.bodega_codigo),
+        nombre: this.firstText(row.bodega_nombre),
+        stock_actual: this.toNumber(row.stock_actual),
+        stock_min_bodega: this.toNumber(row.stock_min_bodega),
+        stock_max_bodega: this.toNumber(row.stock_max_bodega),
+        costo_promedio_bodega: this.toNumber(row.costo_promedio_bodega),
+        estado_stock:
+          this.toNumber(row.stock_actual) <= 0
+            ? 'SIN_STOCK'
+            : this.toNumber(row.stock_min_bodega) > 0 &&
+                this.toNumber(row.stock_actual) <= this.toNumber(row.stock_min_bodega)
+              ? 'BAJO_MINIMO'
+              : 'DISPONIBLE',
+      };
+      const current = stockByProduct.get(productId) ?? [];
+      current.push(warehouse);
+      stockByProduct.set(productId, current);
+    }
+
+    return materials
+      .map((material) => {
+        const warehouses = (stockByProduct.get(String(material.producto_id)) ?? [])
+          .slice()
+          .sort((a, b) => b.stock_actual - a.stock_actual);
+        const stockTotal = Number(
+          warehouses
+            .reduce((sum, warehouse) => sum + warehouse.stock_actual, 0)
+            .toFixed(2),
+        );
+        const lowStockBodegas = warehouses.filter(
+          (warehouse) => warehouse.estado_stock !== 'DISPONIBLE',
+        ).length;
+        const stockStatus =
+          stockTotal <= 0
+            ? 'SIN_STOCK'
+            : lowStockBodegas > 0
+              ? 'BAJO_MINIMO'
+              : 'DISPONIBLE';
+        return {
+          ...material,
+          stock_total: stockTotal,
+          low_stock_bodegas: lowStockBodegas,
+          stock_status: stockStatus,
+          bodega_sugerida: warehouses[0] ?? null,
+          bodegas: warehouses.slice(0, 5),
+        };
+      })
+      .sort((left, right) => {
+        if (left.es_lubricante_esperado !== right.es_lubricante_esperado) {
+          return left.es_lubricante_esperado ? -1 : 1;
+        }
+        if (left.stock_status !== right.stock_status) {
+          const order = ['DISPONIBLE', 'BAJO_MINIMO', 'SIN_STOCK'];
+          return order.indexOf(left.stock_status) - order.indexOf(right.stock_status);
+        }
+        if (left.consumo_total !== right.consumo_total) {
+          return right.consumo_total - left.consumo_total;
+        }
+        return String(left.nombre || '').localeCompare(String(right.nombre || ''));
+      })
+      .slice(0, 8);
+  }
+
+  private normalizeToken(value: unknown) {
+    return String(value ?? '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ');
+  }
+
   private firstText(...values: Array<unknown>) {
     for (const value of values) {
       const normalized = String(value ?? '').trim();
@@ -1049,8 +1802,14 @@ export class DigitalTwinService {
   }
 
   private tryParseJsonObject(value: string) {
+    const normalized = String(value || '')
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+
     try {
-      return JSON.parse(value) as Record<string, string>;
+      return JSON.parse(normalized) as Record<string, unknown>;
     } catch {
       return null;
     }
