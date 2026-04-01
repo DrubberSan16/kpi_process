@@ -613,7 +613,7 @@ export class DigitalTwinService {
     const lubricantMatchPenalty =
       lubricantMatchStatus === 'NO_COINCIDE'
         ? 10
-        : lubricantMatchStatus === 'SIN_REFERENCIA'
+        : lubricantMatchStatus === 'SIN_ANALISIS'
           ? 3
           : 0;
     const lowStockMaterials = recommendedMaterials.filter(
@@ -685,7 +685,7 @@ export class DigitalTwinService {
       { key: 'HORAS_PROGRAMADAS', label: 'Horas programadas mensuales', category: 'PLANIFICACION', value: metrics.planned_hours_month, unit: 'h', severity: metrics.planned_hours_month > 0 ? 'INFO' : 'WARNING', helper: 'Carga total programada en mensual' },
       { key: 'ACTIVIDADES_SEMANALES', label: 'Actividades semanales', category: 'PLANIFICACION', value: metrics.weekly_activity_count, reference_value: metrics.weekly_hours, severity: metrics.weekly_activity_count > 0 ? 'INFO' : 'WARNING', helper: 'Bloques y detalle de cronograma semanal' },
       { key: 'LUBRICANTE', label: 'Condición de lubricante', category: 'PREDICTIVO', value: lubricantState === 'ALERTA' || lubricantState === 'ANORMAL' ? 100 : lubricantState === 'OBSERVACION' || lubricantState === 'PRECAUCION' ? 65 : lubricantState === 'NORMAL' ? 20 : 0, reference_value: 20, severity: lubricantState === 'ALERTA' || lubricantState === 'ANORMAL' ? 'CRITICAL' : lubricantState === 'OBSERVACION' || lubricantState === 'PRECAUCION' ? 'WARNING' : 'INFO', helper: `Último estado: ${lubricantState}` },
-      { key: 'MATCH_LUBRICANTE', label: 'Coincidencia de lubricante', category: 'PREDICTIVO', value: lubricantMatchStatus === 'NO_COINCIDE' ? 100 : lubricantMatchStatus === 'SIN_REFERENCIA' ? 45 : 10, reference_value: 10, severity: lubricantMatchStatus === 'NO_COINCIDE' ? 'CRITICAL' : lubricantMatchStatus === 'SIN_REFERENCIA' ? 'WARNING' : 'INFO', helper: `Esperado: ${equipment.codigo_lubricante || 'No definido'} · Analizado: ${this.firstText(lubricantRow?.latest_lubricant) || 'Sin análisis'}` },
+      { key: 'MATCH_LUBRICANTE', label: 'Consistencia de lubricación', category: 'PREDICTIVO', value: lubricantMatchStatus === 'NO_COINCIDE' ? 100 : lubricantMatchStatus === 'SIN_ANALISIS' ? 45 : 10, reference_value: 10, severity: lubricantMatchStatus === 'NO_COINCIDE' ? 'CRITICAL' : lubricantMatchStatus === 'SIN_ANALISIS' ? 'WARNING' : 'INFO', helper: lubricantMatchStatus === 'NO_APLICA' ? `Último lubricante analizado: ${this.firstText(lubricantRow?.latest_lubricant) || 'Sin análisis'}` : `Esperado: ${equipment.codigo_lubricante || 'No definido'} · Analizado: ${this.firstText(lubricantRow?.latest_lubricant) || 'Sin análisis'}` },
       { key: 'INVENTARIO_MATERIALES', label: 'Disponibilidad de materiales', category: 'INVENTARIO', value: lowStockMaterials, reference_value: recommendedMaterials.length, severity: recommendedMaterials.some((item) => item.es_lubricante_esperado && item.stock_status !== 'DISPONIBLE') ? 'CRITICAL' : lowStockMaterials > 0 ? 'WARNING' : 'INFO', helper: `${lowStockMaterials} materiales sugeridos con stock comprometido en bodega` },
       { key: 'REPORTES_DIARIOS', label: 'Reportes diarios', category: 'OPERACION', value: metrics.daily_report_count, reference_value: metrics.operation_hours, severity: metrics.daily_report_count === 0 ? 'WARNING' : 'INFO', helper: 'Reportes operativos diarios asociados al equipo' },
       { key: 'PROGRAMACIONES_VENCIDAS', label: 'Programaciones vencidas', category: 'PLANIFICACION', value: metrics.overdue_programaciones, severity: metrics.overdue_programaciones > 0 ? 'CRITICAL' : 'INFO', helper: 'Programaciones que ya debieron ejecutarse' },
@@ -1576,7 +1576,7 @@ export class DigitalTwinService {
   ) {
     const expected = this.normalizeToken(expectedLubricantCode);
     const actual = this.normalizeToken(actualLubricant);
-    if (!expected) return 'SIN_REFERENCIA';
+    if (!expected) return 'NO_APLICA';
     if (!actual) return 'SIN_ANALISIS';
     if (expected === actual || expected.includes(actual) || actual.includes(expected)) {
       return 'COINCIDE';
