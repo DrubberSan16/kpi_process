@@ -149,6 +149,14 @@ type SimilarEquipmentSuggestion = {
   similarity_reason: string;
 };
 
+type NationalModelRecommendation = {
+  model: string;
+  manufacturer?: string | null;
+  country?: string | null;
+  reason?: string | null;
+  application?: string | null;
+};
+
 const MONTH_LABELS = [
   'Enero',
   'Febrero',
@@ -846,7 +854,7 @@ export class DigitalTwinService {
             {
               role: 'system',
               content:
-                'Eres un analista experto en mantenimiento industrial y gemelos digitales. Responde con JSON válido con las llaves title, summary, recommendation, priority.',
+                'Eres un analista experto en mantenimiento industrial y gemelos digitales para unidades de generación. Responde con JSON válido con las llaves title, summary, recommendation, priority, improvement_steps y national_models. national_models debe ser un arreglo de 2 a 4 objetos con model, manufacturer, country, reason y application. Recomienda alternativas nacionales o de provisión local para Ecuador y no repitas equipos internos guardados en el sistema.',
             },
             {
               role: 'user',
@@ -868,8 +876,9 @@ export class DigitalTwinService {
                   inventory: snapshot.inventory,
                   metrics: snapshot.metrics,
                   signals: snapshot.signals,
-                  similar_equipment: similarEquipment,
                   suggested_steps: improvementSteps,
+                  recommendation_focus:
+                    'Buscar modelos nacionales recomendados y acciones de mejora para el equipo.',
                   notes: notes ?? null,
                 },
                 null,
@@ -903,6 +912,9 @@ export class DigitalTwinService {
         (parsed as Record<string, unknown>).improvement_steps,
         improvementSteps,
       );
+      const resolvedNationalModels = this.resolveNationalModelsPayload(
+        (parsed as Record<string, unknown>).national_models,
+      );
 
       return {
         source: 'AI',
@@ -927,6 +939,7 @@ export class DigitalTwinService {
           recommended_materials: snapshot.inventory.recommended_materials,
           similar_equipment: resolvedSimilarEquipment,
           improvement_steps: resolvedImprovementSteps,
+          national_models: resolvedNationalModels,
           raw: rawContent,
         },
       };
@@ -993,6 +1006,7 @@ export class DigitalTwinService {
         recommended_materials: snapshot.inventory.recommended_materials,
         similar_equipment: similarEquipment ?? null,
         improvement_steps: resolvedSteps,
+        national_models: [],
       },
     };
   }
@@ -1279,6 +1293,48 @@ export class DigitalTwinService {
       .filter((item): item is string => Boolean(item));
 
     return normalized.length ? normalized : fallback;
+  }
+
+  private resolveNationalModelsPayload(
+    value: unknown,
+  ): NationalModelRecommendation[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const normalized = value
+      .map((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          return null;
+        }
+        const payload = item as Record<string, unknown>;
+        const model = this.firstText(
+          payload.model,
+          payload.modelo,
+          payload.name,
+        );
+        if (!model) {
+          return null;
+        }
+        return {
+          model,
+          manufacturer: this.firstText(
+            payload.manufacturer,
+            payload.fabricante,
+            payload.brand,
+          ),
+          country: this.firstText(payload.country, payload.pais, 'Ecuador'),
+          reason: this.firstText(payload.reason, payload.razon),
+          application: this.firstText(
+            payload.application,
+            payload.aplicacion,
+            payload.scope,
+          ),
+        };
+      })
+      .filter(Boolean) as NationalModelRecommendation[];
+
+    return normalized.slice(0, 4);
   }
 
   private resolvePeriod(year?: number, month?: number): DashboardPeriod {
