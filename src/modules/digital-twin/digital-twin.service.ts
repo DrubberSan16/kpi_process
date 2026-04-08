@@ -53,6 +53,16 @@ type TwinMaterialRecommendation = {
   bodegas: TwinInventoryWarehouse[];
 };
 
+type TwinEquipmentComponent = {
+  id: string | null;
+  codigo: string | null;
+  nombre: string | null;
+  nombre_oficial: string | null;
+  categoria: string | null;
+  descripcion: string | null;
+  orden: number;
+};
+
 type TwinComputedSnapshot = {
   twin: DigitalTwin;
   period: DashboardPeriod;
@@ -66,6 +76,7 @@ type TwinComputedSnapshot = {
     criticidad: string | null;
     estado_operativo: string | null;
     codigo_lubricante: string | null;
+    components: TwinEquipmentComponent[];
   };
   metrics: {
     critical_alerts: number;
@@ -528,6 +539,7 @@ export class DigitalTwinService {
     const equipmentCode =
       this.firstText(twin.equipment_code, equipmentContext?.codigo) ?? null;
     const currentHours = await this.queryCurrentEquipmentHours(equipmentId);
+    const equipmentComponents = await this.queryEquipmentComponents(equipmentId);
     const equipment = {
       code: equipmentCode,
       operational_name: this.firstText(
@@ -550,6 +562,7 @@ export class DigitalTwinService {
       criticidad: this.firstText(equipmentContext?.criticidad),
       estado_operativo: this.firstText(equipmentContext?.estado_operativo),
       codigo_lubricante: this.firstText(equipmentContext?.codigo_lubricante),
+      components: equipmentComponents,
     };
 
     const [
@@ -1346,6 +1359,39 @@ export class DigitalTwinService {
       [normalized],
     );
     return rows?.[0] ?? null;
+  }
+
+  private async queryEquipmentComponents(
+    equipmentId?: string | null,
+  ): Promise<TwinEquipmentComponent[]> {
+    const normalized = String(equipmentId || '').trim();
+    if (!normalized) return [];
+    const rows = await this.dataSource.query(
+      `
+        select
+          c.id,
+          c.codigo,
+          c.nombre,
+          c.nombre_oficial,
+          c.categoria,
+          c.descripcion,
+          coalesce(c.orden, 1) as orden
+        from kpi_maintenance.tb_equipo_componente c
+        where c.equipo_id = $1
+          and c.is_deleted = false
+        order by coalesce(c.orden, 1), coalesce(c.nombre_oficial, c.nombre), c.created_at
+      `,
+      [normalized],
+    );
+    return (rows ?? []).map((row: any) => ({
+      id: row?.id ?? null,
+      codigo: this.firstText(row?.codigo),
+      nombre: this.firstText(row?.nombre),
+      nombre_oficial: this.firstText(row?.nombre_oficial, row?.nombre),
+      categoria: this.firstText(row?.categoria),
+      descripcion: this.firstText(row?.descripcion),
+      orden: Number(row?.orden ?? 1) || 1,
+    }));
   }
 
   private async queryCurrentEquipmentHours(equipmentId?: string | null) {
