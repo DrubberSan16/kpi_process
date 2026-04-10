@@ -149,6 +149,47 @@ type SimilarEquipmentSuggestion = {
   similarity_reason: string;
 };
 
+type AiComparisonContext = {
+  equipment_reference: {
+    code: string | null;
+    operational_name: string | null;
+    real_name: string | null;
+    display_name: string | null;
+    model: string | null;
+    brand_name: string | null;
+    criticidad: string | null;
+    estado_operativo: string | null;
+  };
+  official_components: Array<{
+    codigo: string | null;
+    nombre: string | null;
+    nombre_oficial: string | null;
+    categoria: string | null;
+    descripcion: string | null;
+  }>;
+  component_summary: string[];
+  functional_keywords: string[];
+  lubricant_reference: {
+    expected_code: string | null;
+    analyzed_name: string | null;
+    analyzed_brand: string | null;
+    analyzed_state: string | null;
+    analyzed_report_code: string | null;
+    match_status: string | null;
+  };
+  internal_reference: SimilarEquipmentSuggestion | null;
+  internal_models_to_avoid: string[];
+  performance_focus: string[];
+  inventory_material_context: Array<{
+    codigo: string | null;
+    nombre: string | null;
+    stock_status: string;
+    es_lubricante_esperado: boolean;
+    bodega_sugerida: string | null;
+  }>;
+  improvement_steps: string[];
+};
+
 type NationalModelRecommendation = {
   model: string;
   manufacturer?: string | null;
@@ -811,6 +852,11 @@ export class DigitalTwinService {
     similarEquipment?: SimilarEquipmentSuggestion | null,
     improvementSteps: string[] = [],
   ): Promise<AiInsightPayload> {
+    const aiComparisonContext = this.buildAiComparisonContext(
+      snapshot,
+      similarEquipment,
+      improvementSteps,
+    );
     const apiKey = String(
       this.configService.get('DIGITAL_TWIN_AI_API_KEY') || '',
     ).trim();
@@ -857,6 +903,15 @@ export class DigitalTwinService {
                 'Eres un analista experto en mantenimiento industrial y gemelos digitales para unidades de generación. Responde con JSON válido con las llaves title, summary, recommendation, priority, improvement_steps y national_models. national_models debe ser un arreglo de 2 a 4 objetos con model, manufacturer, country, reason y application. Recomienda alternativas nacionales o de provisión local para Ecuador y no repitas equipos internos guardados en el sistema.',
             },
             {
+              role: 'system',
+              content: [
+                'Valida la recomendación contra el nombre real del equipo, modelo, marca, compartimientos oficiales, criticidad y estado operativo.',
+                'Cruza también lubricante esperado, lubricante analizado, marca del lubricante, materiales sugeridos y stock de respaldo.',
+                'La recomendación debe mantener la misma función operativa del equipo, pero con mejor funcionalidad, rapidez, mantenibilidad o disponibilidad.',
+                'Evita repetir modelos internos guardados en el sistema y prioriza opciones nacionales o de abastecimiento local en Ecuador.',
+              ].join(' '),
+            },
+            {
               role: 'user',
               content: JSON.stringify(
                 {
@@ -872,13 +927,14 @@ export class DigitalTwinService {
                   health_score: snapshot.health_score,
                   risk_level: snapshot.risk_level,
                   operational_status: snapshot.operational_status,
+                  comparison_context: aiComparisonContext,
                   lubricant: snapshot.lubricant,
                   inventory: snapshot.inventory,
                   metrics: snapshot.metrics,
                   signals: snapshot.signals,
                   suggested_steps: improvementSteps,
                   recommendation_focus:
-                    'Buscar modelos nacionales recomendados y acciones de mejora para el equipo.',
+                    'Buscar un equipo recomendado que haga la misma función del equipo analizado, con mejor desempeño, rapidez, mantenibilidad y disponibilidad; validar también partes oficiales, lubricante utilizado, marca del lubricante y materiales sugeridos.',
                   notes: notes ?? null,
                 },
                 null,
@@ -934,6 +990,7 @@ export class DigitalTwinService {
           provider: 'openai-compatible',
           model,
           notes: notes ?? null,
+          analysis_context: aiComparisonContext,
           equipment: snapshot.equipment,
           inventory: snapshot.inventory,
           recommended_materials: snapshot.inventory.recommended_materials,
@@ -963,6 +1020,11 @@ export class DigitalTwinService {
     similarEquipment?: SimilarEquipmentSuggestion | null,
     improvementSteps: string[] = [],
   ): AiInsightPayload {
+    const analysisContext = this.buildAiComparisonContext(
+      snapshot,
+      similarEquipment,
+      improvementSteps,
+    );
     const hasCriticalCondition =
       snapshot.metrics.critical_alerts > 0 ||
       snapshot.metrics.overdue_programaciones > 0 ||
@@ -1001,6 +1063,7 @@ export class DigitalTwinService {
       payload_json: {
         generated_with: source,
         notes: notes ?? null,
+        analysis_context: analysisContext,
         equipment: snapshot.equipment,
         inventory: snapshot.inventory,
         recommended_materials: snapshot.inventory.recommended_materials,
@@ -1008,6 +1071,105 @@ export class DigitalTwinService {
         improvement_steps: resolvedSteps,
         national_models: [],
       },
+    };
+  }
+
+  private buildAiComparisonContext(
+    snapshot: TwinComputedSnapshot,
+    similarEquipment?: SimilarEquipmentSuggestion | null,
+    improvementSteps: string[] = [],
+  ): AiComparisonContext {
+    const officialComponents = snapshot.equipment.components.map((component) => ({
+      codigo: component.codigo,
+      nombre: component.nombre,
+      nombre_oficial: component.nombre_oficial,
+      categoria: component.categoria,
+      descripcion: component.descripcion,
+    }));
+
+    const componentSummary = officialComponents
+      .map((component) =>
+        [component.codigo, component.nombre_oficial || component.nombre, component.categoria]
+          .filter(Boolean)
+          .join(' · '),
+      )
+      .filter(Boolean)
+      .slice(0, 10);
+
+    const functionalKeywords = Array.from(
+      new Set(
+        [
+          snapshot.equipment.real_name,
+          snapshot.equipment.operational_name,
+          snapshot.equipment.display_name,
+          snapshot.equipment.model,
+          snapshot.equipment.brand_name,
+          ...officialComponents.flatMap((component) => [
+            component.nombre_oficial,
+            component.nombre,
+            component.categoria,
+          ]),
+        ]
+          .map((value) => this.firstText(value))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ).slice(0, 16);
+
+    const internalModelsToAvoid = Array.from(
+      new Set(
+        [
+          snapshot.equipment.model,
+          snapshot.twin.equipment_model,
+          similarEquipment?.equipment_model,
+          similarEquipment?.equipment_name,
+        ]
+          .map((value) => this.firstText(value))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    return {
+      equipment_reference: {
+        code: snapshot.equipment.code,
+        operational_name: snapshot.equipment.operational_name,
+        real_name: snapshot.equipment.real_name,
+        display_name: snapshot.equipment.display_name,
+        model: snapshot.equipment.model,
+        brand_name: snapshot.equipment.brand_name,
+        criticidad: snapshot.equipment.criticidad,
+        estado_operativo: snapshot.equipment.estado_operativo,
+      },
+      official_components: officialComponents,
+      component_summary: componentSummary,
+      functional_keywords: functionalKeywords,
+      lubricant_reference: {
+        expected_code: snapshot.lubricant.expected_lubricant_code,
+        analyzed_name: snapshot.lubricant.latest_lubricant,
+        analyzed_brand: snapshot.lubricant.latest_lubricant_brand,
+        analyzed_state: snapshot.lubricant.latest_state,
+        analyzed_report_code: snapshot.lubricant.latest_report_code,
+        match_status: snapshot.lubricant.match_status,
+      },
+      internal_reference: similarEquipment ?? null,
+      internal_models_to_avoid: internalModelsToAvoid,
+      performance_focus: [
+        'misma función operativa',
+        'mayor funcionalidad',
+        'mayor rapidez de respuesta',
+        'mejor mantenibilidad',
+        'mejor disponibilidad',
+      ],
+      inventory_material_context: snapshot.inventory.recommended_materials
+        .slice(0, 8)
+        .map((item) => ({
+          codigo: item.codigo,
+          nombre: item.nombre,
+          stock_status: item.stock_status,
+          es_lubricante_esperado: item.es_lubricante_esperado,
+          bodega_sugerida:
+            item.bodega_sugerida?.codigo || item.bodega_sugerida?.nombre || null,
+        })),
+      improvement_steps: improvementSteps,
     };
   }
 
@@ -1187,6 +1349,26 @@ export class DigitalTwinService {
     if (snapshot.lubricant.match_status === 'NO_COINCIDE') {
       steps.push(
         `Verificar el lubricante aplicado. El equipo espera ${snapshot.lubricant.expected_lubricant_code || 'un código definido'} y el último análisis reporta ${snapshot.lubricant.latest_lubricant || 'otro lubricante'}.`,
+      );
+    }
+
+    if (snapshot.lubricant.latest_lubricant || snapshot.lubricant.latest_lubricant_brand) {
+      steps.push(
+        `Validar compatibilidad del lubricante analizado ${[snapshot.lubricant.latest_lubricant_brand, snapshot.lubricant.latest_lubricant].filter(Boolean).join(' · ')} con el modelo ${snapshot.equipment.model || 'del equipo'} y sus partes oficiales.`,
+      );
+    }
+
+    if (snapshot.equipment.components.length > 0) {
+      const criticalComponents = snapshot.equipment.components
+        .slice(0, 3)
+        .map((component) =>
+          [component.codigo, component.nombre_oficial || component.nombre]
+            .filter(Boolean)
+            .join(' - '),
+        )
+        .filter(Boolean);
+      steps.push(
+        `Contrastar el plan de intervención con los compartimientos oficiales${criticalComponents.length ? `: ${criticalComponents.join(', ')}` : ''}.`,
       );
     }
 
