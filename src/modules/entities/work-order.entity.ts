@@ -7,6 +7,11 @@ export class WorkOrder {
   @Column({ type: 'text' }) type: string;
   @Column({ type: 'uuid', nullable: true }) equipment_id?: string | null;
   @Column({ type: 'uuid', nullable: true }) plan_id?: string | null;
+  @Column({ type: 'uuid', nullable: true }) blocked_by_work_order_id?: string | null;
+  @Column({ type: 'uuid', nullable: true }) parent_work_order_id?: string | null;
+  @Column({ type: 'text', nullable: true }) blocked_reason?: string | null;
+  @Column({ type: 'timestamp without time zone', nullable: true }) blocked_at?: Date | null;
+  @Column({ type: 'timestamp without time zone', nullable: true }) resumed_at?: Date | null;
   @Column({ type: 'text' }) title: string;
   @Column({ type: 'text', nullable: true }) description?: string | null;
   @Column({ type: 'text', default: 'PLANNED' }) status_workflow: string;
