@@ -37,7 +37,12 @@ import { WorkOrderStatusHistoryModule } from './modules/work-order-status-histor
           synchronize: false,
           logging: false,
           ssl: sslEnabled ? { rejectUnauthorized: false } : false,
-          extra: { options: `-c timezone=${appTimeZone}` },
+          extra: { 
+            options: `-c timezone=${appTimeZone}`,
+            max: 5,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 5000,
+          },
         };
       },
     }),
