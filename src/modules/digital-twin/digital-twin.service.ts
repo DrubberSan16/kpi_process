@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -353,6 +354,60 @@ export class DigitalTwinService {
     current.updated_at = new Date();
     await this.digitalTwinRepo.save(current);
     return { message: `Gemelo digital ${id} eliminado correctamente` };
+  }
+
+  private isSuperAdministratorRoleName(roleName?: string): boolean {
+    const normalized = String(roleName || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toUpperCase();
+    return [
+      'SUPER ADMINISTRADOR',
+      'SUPERADMINISTRADOR',
+      'SUPER_ADMINISTRADOR',
+      'SUPER ADMIN',
+    ].includes(normalized);
+  }
+
+  private assertCanPurge(roleName?: string) {
+    if (this.isSuperAdministratorRoleName(roleName)) return;
+    throw new ForbiddenException(
+      'Solo el Super Administrador puede ejecutar eliminacion real masiva.',
+    );
+  }
+
+  async purgeAll(roleName?: string) {
+    this.assertCanPurge(roleName);
+    const result = await this.digitalTwinRepo.manager.transaction(async (manager) => {
+      const insights = await manager
+        .createQueryBuilder()
+        .delete()
+        .from(DigitalTwinInsight)
+        .execute();
+      const signals = await manager
+        .createQueryBuilder()
+        .delete()
+        .from(DigitalTwinSignal)
+        .execute();
+      const twins = await manager
+        .createQueryBuilder()
+        .delete()
+        .from(DigitalTwin)
+        .execute();
+
+      return {
+        insights: Number(insights.affected || 0),
+        signals: Number(signals.affected || 0),
+        twins: Number(twins.affected || 0),
+      };
+    });
+
+    return {
+      message: `Eliminacion real masiva ejecutada correctamente (${result.twins} gemelos digitales).`,
+      affected: result.twins,
+      details: result,
+    };
   }
 
   async getNextCode() {
