@@ -1987,7 +1987,7 @@ export class DigitalTwinService {
             p.id as producto_id,
             p.codigo,
             p.nombre,
-            coalesce(p.costo_promedio, 0) as costo_referencia
+            coalesce(nullif(p.costo_promedio, 0), p.ultimo_costo, 0) as costo_referencia
           from kpi_inventory.tb_producto p
           where p.is_deleted = false
             and (
