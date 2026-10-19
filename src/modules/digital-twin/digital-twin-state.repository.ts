@@ -67,14 +67,15 @@ export class DigitalTwinStateRepository {
   }
   readings(id: string) {
     return this.db.query(
-      `select id,horometro_anterior,horometro_nuevo,changed_at,fuente,observacion
-    from kpi_maintenance.tb_equipo_horometro_historial where equipo_id=$1 order by changed_at desc limit 100`,
+      `select id,horometro_anterior,horometro_nuevo,changed_at,fuente,observacion,changed_by as actor
+    from kpi_maintenance.tb_equipo_horometro_historial where equipo_id=$1
+      and changed_at >= now()-interval '180 days' order by changed_at desc limit 1000`,
       [id],
     );
   }
   operations(id: string) {
     return this.db.query(
-      `select id,estado_anterior,estado_nuevo,changed_at
+      `select id,estado_anterior,estado_nuevo,changed_at,changed_by as actor
     from kpi_maintenance.tb_equipo_funcionamiento_historial where equipo_id=$1 order by changed_at desc limit 100`,
       [id],
     );
@@ -83,6 +84,70 @@ export class DigitalTwinStateRepository {
     return this.db.query(
       `select id,location_codigo,location_nombre,sucursal_nombre,valid_from,valid_to,source
     from kpi_maintenance.tb_equipo_ubicacion_historial where equipo_id=$1 order by valid_from desc limit 100`,
+      [id],
+    );
+  }
+
+  orderEvents(id: string) {
+    return this.db.query(
+      `select h.id,h.changed_at,h.from_status,h.to_status,h.note,
+      w.code,w.title,coalesce(nullif(u.name_surname,''),nullif(u.name_user,''),h.changed_by::text,'Usuario sin registro') as actor
+      from kpi_process.tb_work_order_status_history h
+      join kpi_process.tb_work_order w on w.id=h.work_order_id
+      left join kpi_security.tb_user u on u.id=h.changed_by
+      where w.equipment_id=$1 and not w.is_deleted
+        and upper(coalesce(w.status,'')) not in (${annulled})
+        and upper(coalesce(w.status_workflow,'')) not in (${annulled})
+        and upper(coalesce(w.valor_json->>'approval_action','')) not in (${annulled})
+        and coalesce(jsonb_typeof(w.valor_json::jsonb->'annulment'),'') <> 'object'
+      order by h.changed_at desc limit 100`,
+      [id],
+    );
+  }
+
+  simulationOrders(id: string, asOf: string) {
+    return this.db.query(
+      `select w.*,p.nombre as plan_name,p.requiere_parada as requires_stop,
+      coalesce(w.scheduled_start::text,nullif(w.valor_json->>'fecha_programacion',''),sp.proxima_fecha::text) as schedule_reference,
+      coalesce((select json_agg(h order by h.changed_at) from (
+        select changed_at,from_status,to_status from kpi_process.tb_work_order_status_history
+        where work_order_id=w.id) h),'[]'::json) as history
+      from kpi_process.tb_work_order w
+      left join kpi_maintenance.tb_plan_mantenimiento p on p.id=w.plan_id
+      left join lateral (select proxima_fecha from kpi_maintenance.tb_programacion_plan
+        where work_order_id=w.id and activo and not is_deleted order by updated_at desc limit 1) sp on true
+      where w.equipment_id=$1 and not w.is_deleted
+        and upper(coalesce(w.status,'')) not in (${annulled})
+        and upper(coalesce(w.status_workflow,'')) not in (${annulled})
+        and upper(coalesce(w.valor_json->>'approval_action','')) not in (${annulled})
+        and coalesce(jsonb_typeof(w.valor_json::jsonb->'annulment'),'') <> 'object'
+        and (upper(w.status_workflow) not in ('CLOSED','CERRADA','CERRADO')
+          or coalesce(w.hora_fin,w.closed_at) >= ($2::timestamptz at time zone 'America/Guayaquil')-interval '365 days')
+      order by coalesce(w.hora_fin,w.closed_at,w.started_at,w.created_at) desc`,
+      [id, asOf],
+    );
+  }
+
+  simulationSchedules(id: string) {
+    return this.db.query(
+      `select s.id,s.codigo as code,s.work_order_id,s.plan_id,s.proxima_fecha,s.proxima_horas,
+      p.nombre as plan_name,p.requiere_parada as requires_stop,md.horas_mantenimiento as planned_duration,p.tipo as maintenance_kind
+      from kpi_maintenance.tb_programacion_plan s
+      left join kpi_maintenance.tb_plan_mantenimiento p on p.id=s.plan_id
+      left join lateral (select d.horas_mantenimiento from kpi_maintenance.tb_programacion_mensual_det d
+        join kpi_maintenance.tb_programacion_mensual m on m.id=d.programacion_mensual_id
+        where d.programacion_id=s.id and not d.is_deleted and not m.is_deleted
+        and upper(d.status)='ACTIVE' and upper(m.status)='ACTIVE'
+        order by d.updated_at desc limit 1) md on true
+      where s.equipo_id=$1 and s.activo and not s.is_deleted and upper(s.status)='ACTIVE'
+      union all
+      select d.id,concat(m.codigo,' · ',d.valor_normalizado),null::uuid,d.plan_id,d.fecha_programada,
+        null::numeric,p.nombre,p.requiere_parada,d.horas_mantenimiento,p.tipo
+      from kpi_maintenance.tb_programacion_mensual_det d
+      join kpi_maintenance.tb_programacion_mensual m on m.id=d.programacion_mensual_id
+      left join kpi_maintenance.tb_plan_mantenimiento p on p.id=d.plan_id
+      where d.equipo_id=$1 and d.programacion_id is null and not d.is_deleted and not m.is_deleted
+        and d.es_sincronizable and upper(d.status)='ACTIVE' and upper(m.status)='ACTIVE'`,
       [id],
     );
   }

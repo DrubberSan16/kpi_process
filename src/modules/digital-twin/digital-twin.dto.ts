@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsIn,
   IsInt,
   IsObject,
   IsNumber,
@@ -187,4 +188,8 @@ export class DigitalTwinSimulationDto {
   @Type(() => Number) @IsInt() @Min(1) @Max(365) days: number;
   @Type(() => Number) @IsNumber() @Min(0) @Max(24) hours_per_day: number;
   @Type(() => Number) @IsNumber() @Min(0) @Max(8760) downtime_hours: number;
+  @IsOptional() @IsIn(['MANUAL', 'HISTORICAL']) rate_mode?:
+    | 'MANUAL'
+    | 'HISTORICAL';
+  @IsOptional() @IsBoolean() include_possible?: boolean;
 }

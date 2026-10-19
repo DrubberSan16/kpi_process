@@ -128,44 +128,4 @@ export function evaluateCondition(
     basis: 'Reglas sobre registros operativos; requiere verificación física',
   };
 }
-export function simulateTwin(
-  state: any,
-  input: { days: number; hours_per_day: number; downtime_hours: number },
-) {
-  const { days, hours_per_day, downtime_hours } = input;
-  if (
-    ![days, hours_per_day, downtime_hours].every(Number.isFinite) ||
-    !Number.isInteger(days) ||
-    days < 1 ||
-    days > 365 ||
-    hours_per_day < 0 ||
-    hours_per_day > 24 ||
-    downtime_hours < 0 ||
-    downtime_hours > days * hours_per_day
-  )
-    throw new Error('Supuestos fuera del rango permitido');
-  const start = numeric(state.horometer?.estimated);
-  if (start === null)
-    throw new Error('Se necesita un horómetro válido para simular');
-  const added = Math.max(0, days * hours_per_day - downtime_hours);
-  const target = state.maintenance?.target ?? null;
-  const remaining =
-    target === null ? null : Number((target - start - added).toFixed(2));
-  return {
-    assumptions: input,
-    basis_at: state.as_of,
-    start,
-    added_hours: added,
-    projected_horometer: Number((start + added).toFixed(2)),
-    target,
-    remaining,
-    exceeds_target: remaining === null ? null : remaining < 0,
-    target_reliable: state.maintenance?.reliable ?? false,
-    points: Array.from({ length: days + 1 }, (_, day) => ({
-      day,
-      horometer: Number((start + (added * day) / days).toFixed(2)),
-    })),
-    explanation:
-      'Proyección lineal con parada total distribuida en el horizonte. No simula fallas, desgaste ni sensores; no modifica el equipo.',
-  };
-}
+export { simulateTwin } from './digital-twin-simulation';

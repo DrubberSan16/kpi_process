@@ -12,6 +12,7 @@ import {
   simulateTwin,
   timestamp,
 } from './digital-twin-model';
+import { observedRate } from './digital-twin-duration';
 
 @Injectable()
 export class DigitalTwinStateService {
@@ -89,7 +90,7 @@ export class DigitalTwinStateService {
       ),
       read(
         'readings',
-        'Lecturas de horómetro (últimas 100)',
+        'Lecturas de horómetro (180 días, máximo 1000)',
         () => this.source.readings(equipment.id),
         'changed_at',
       ),
@@ -105,6 +106,12 @@ export class DigitalTwinStateService {
       'Ubicaciones y sucursales (últimas 100)',
       () => this.source.locations(equipment.id),
       'valid_from',
+    );
+    const orderEvents = await read(
+      'order_events',
+      'Transiciones de OT (últimas 100)',
+      () => this.source.orderEvents(equipment.id),
+      'changed_at',
     );
     const clock = horometer(equipment, now);
     const maintenance = maintenanceTarget(equipment, clock.estimated);
@@ -154,6 +161,7 @@ export class DigitalTwinStateService {
         id: `reading-${r.id}`,
         at: timestamp(r.changed_at),
         type: 'HOROMETRO',
+        actor: r.actor,
         title: `${r.horometro_anterior ?? '—'} → ${r.horometro_nuevo} h`,
         detail: r.observacion || r.fuente,
       })),
@@ -161,15 +169,28 @@ export class DigitalTwinStateService {
         id: `operation-${r.id}`,
         at: timestamp(r.changed_at),
         type: 'FUNCIONAMIENTO',
+        actor: r.actor,
         title: `${r.estado_anterior ?? '—'} → ${r.estado_nuevo}`,
         detail: 'Cambio registrado de funcionamiento',
       })),
-      ...orders.map((r) => ({
-        id: `order-${r.id}`,
-        at: timestamp(r.closed_at || r.started_at || r.created_at),
+      ...orders
+        .filter((r) => !orderEvents.some((h) => h.code === r.code))
+        .map((r) => ({
+          id: `order-${r.id}`,
+          at: timestamp(r.closed_at || r.started_at || r.created_at),
+          type: 'OT',
+          title: `${r.code} · ${r.status_workflow}`,
+          detail: r.title,
+        })),
+      ...orderEvents.map((r) => ({
+        id: `order-event-${r.id}`,
+        at: timestamp(r.changed_at),
         type: 'OT',
-        title: `${r.code} · ${r.status_workflow}`,
-        detail: r.title,
+        title: `${r.code} · ${r.title}`,
+        detail: r.note,
+        actor: r.actor,
+        from_status: r.from_status,
+        to_status: r.to_status,
       })),
       ...alerts.map((r) => ({
         id: `alert-${r.id}`,
@@ -211,6 +232,7 @@ export class DigitalTwinStateService {
       },
       horometer: clock,
       maintenance,
+      simulation_basis: observedRate(readings, now.getTime()),
       condition,
       components,
       alerts,
@@ -237,8 +259,24 @@ export class DigitalTwinStateService {
   }
   async simulate(twin: any, input: any) {
     const state = await this.state(twin);
+    // Simulation sources must succeed; incomplete data is never silently projected.
+    let orders: any[], schedules: any[], readings: any[];
     try {
-      return simulateTwin(state, input);
+      [orders, schedules, readings] = await Promise.all([
+        this.source.simulationOrders(twin.equipment_id, state.as_of),
+        this.source.simulationSchedules(twin.equipment_id),
+        this.source.readings(twin.equipment_id),
+      ]);
+    } catch (error) {
+      this.logger.warn(
+        `Fuentes de simulación no disponibles: ${(error as Error).message}`,
+      );
+      throw new BadRequestException(
+        'No se pudo validar el historial y la programación. Actualiza e intenta nuevamente.',
+      );
+    }
+    try {
+      return simulateTwin(state, input, { orders, schedules, readings });
     } catch (error) {
       throw new BadRequestException((error as Error).message);
     }
