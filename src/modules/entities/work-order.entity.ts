@@ -2,6 +2,9 @@ import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 
 @Entity({ schema: 'kpi_process', name: 'tb_work_order' })
 export class WorkOrder {
+  @Column({type: 'jsonb', nullable: true})
+  equipment_location_snapshot?: {location_id?: string|null;location_code?: string|null;location_name?: string|null;sucursal_id?: string|null;sucursal_code?: string|null;sucursal_name?: string|null;captured_at?: string;basis?: string} | null;
+
   @PrimaryGeneratedColumn('uuid') id: string;
   @Column({ type: 'text' }) code: string;
   @Column({ type: 'text' }) type: string;

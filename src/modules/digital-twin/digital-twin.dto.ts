@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsInt,
   IsObject,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -13,7 +14,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 
 export class CreateDigitalTwinDto {
-  @ApiPropertyOptional({ description: 'Código autogenerado o manual del gemelo digital' })
+  @ApiPropertyOptional({
+    description: 'Código autogenerado o manual del gemelo digital',
+  })
   @IsOptional()
   @IsString()
   code?: string;
@@ -22,7 +25,10 @@ export class CreateDigitalTwinDto {
   @IsString()
   name: string;
 
-  @ApiPropertyOptional({ description: 'ID del equipo operativo asociado en mantenimiento', format: 'uuid' })
+  @ApiPropertyOptional({
+    description: 'ID del equipo operativo asociado en mantenimiento',
+    format: 'uuid',
+  })
   @IsOptional()
   @IsUUID()
   equipment_id?: string;
@@ -42,12 +48,18 @@ export class CreateDigitalTwinDto {
   @IsString()
   equipment_model?: string;
 
-  @ApiPropertyOptional({ description: 'Tipo de gemelo digital', example: 'OPERATIVO' })
+  @ApiPropertyOptional({
+    description: 'Tipo de gemelo digital',
+    example: 'OPERATIVO',
+  })
   @IsOptional()
   @IsString()
   twin_type?: string;
 
-  @ApiPropertyOptional({ description: 'Alcance del proceso', example: 'MANTENIMIENTO' })
+  @ApiPropertyOptional({
+    description: 'Alcance del proceso',
+    example: 'MANTENIMIENTO',
+  })
   @IsOptional()
   @IsString()
   process_scope?: string;
@@ -63,7 +75,10 @@ export class CreateDigitalTwinDto {
   @IsObject()
   config_json?: Record<string, unknown>;
 
-  @ApiPropertyOptional({ description: 'Estado del registro', example: 'ACTIVE' })
+  @ApiPropertyOptional({
+    description: 'Estado del registro',
+    example: 'ACTIVE',
+  })
   @IsOptional()
   @IsString()
   status?: string;
@@ -77,17 +92,25 @@ export class CreateDigitalTwinDto {
 export class UpdateDigitalTwinDto extends CreateDigitalTwinDto {}
 
 export class DigitalTwinListQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({ description: 'Texto para buscar por código, nombre, equipo o modelo' })
+  @ApiPropertyOptional({
+    description: 'Texto para buscar por código, nombre, equipo o modelo',
+  })
   @IsOptional()
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Filtra por nivel de riesgo', example: 'ALTO' })
+  @ApiPropertyOptional({
+    description: 'Filtra por nivel de riesgo',
+    example: 'ALTO',
+  })
   @IsOptional()
   @IsString()
   risk_level?: string;
 
-  @ApiPropertyOptional({ description: 'Filtra por estado del gemelo', example: 'ACTIVE' })
+  @ApiPropertyOptional({
+    description: 'Filtra por estado del gemelo',
+    example: 'ACTIVE',
+  })
   @IsOptional()
   @IsString()
   status?: string;
@@ -100,7 +123,12 @@ export class DigitalTwinDashboardQueryDto {
   @IsInt()
   year?: number;
 
-  @ApiPropertyOptional({ description: 'Mes del periodo', example: 3, minimum: 1, maximum: 12 })
+  @ApiPropertyOptional({
+    description: 'Mes del periodo',
+    example: 3,
+    minimum: 1,
+    maximum: 12,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -121,7 +149,11 @@ export class DigitalTwinAiAnalysisDto {
   @IsInt()
   year?: number;
 
-  @ApiPropertyOptional({ description: 'Mes del periodo', minimum: 1, maximum: 12 })
+  @ApiPropertyOptional({
+    description: 'Mes del periodo',
+    minimum: 1,
+    maximum: 12,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -129,7 +161,9 @@ export class DigitalTwinAiAnalysisDto {
   @Max(12)
   month?: number;
 
-  @ApiPropertyOptional({ description: 'Contexto adicional para el análisis IA' })
+  @ApiPropertyOptional({
+    description: 'Contexto adicional para el análisis IA',
+  })
   @IsOptional()
   @IsString()
   notes?: string;
@@ -141,8 +175,16 @@ export class DigitalTwinAiAnalysisDto {
 }
 
 export class EquipmentCatalogQueryDto {
-  @ApiPropertyOptional({ description: 'Texto para buscar equipo por código o nombre' })
+  @ApiPropertyOptional({
+    description: 'Texto para buscar equipo por código o nombre',
+  })
   @IsOptional()
   @IsString()
   search?: string;
+}
+
+export class DigitalTwinSimulationDto {
+  @Type(() => Number) @IsInt() @Min(1) @Max(365) days: number;
+  @Type(() => Number) @IsNumber() @Min(0) @Max(24) hours_per_day: number;
+  @Type(() => Number) @IsNumber() @Min(0) @Max(8760) downtime_hours: number;
 }

@@ -3,129 +3,77 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
+  Req,
+  UseGuards,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiBody,
-  ApiOperation,
-  ApiParam,
-  ApiQuery,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiExcludeController } from '@nestjs/swagger';
 import { DigitalTwinService } from './digital-twin.service';
+import { DigitalTwinAccessGuard } from './digital-twin-access.guard';
 import {
   CreateDigitalTwinDto,
-  DigitalTwinAiAnalysisDto,
-  DigitalTwinDashboardQueryDto,
+  UpdateDigitalTwinDto,
   DigitalTwinListQueryDto,
   EquipmentCatalogQueryDto,
-  UpdateDigitalTwinDto,
+  DigitalTwinSimulationDto,
 } from './digital-twin.dto';
 
-@ApiTags('digital-twins')
-@ApiBearerAuth('process')
+@ApiExcludeController()
+@UseGuards(DigitalTwinAccessGuard)
 @Controller('digital-twins')
 export class DigitalTwinController {
   constructor(private readonly service: DigitalTwinService) {}
-
-  @Get('next-code')
-  @ApiOperation({ summary: 'Obtener siguiente código de gemelo digital' })
-  getNextCode() {
+  @Get('equipment-options') equipment(@Query() q: EquipmentCatalogQueryDto) {
+    return this.service.getEquipmentCatalog(q.search);
+  }
+  @Get('next-code') code() {
     return this.service.getNextCode();
   }
-
-  @Get('equipment-options')
-  @ApiOperation({ summary: 'Listar equipos disponibles para asociar al gemelo digital' })
-  getEquipmentOptions(@Query() query: EquipmentCatalogQueryDto) {
-    return this.service.getEquipmentCatalog(query.search);
+  @Get() list(@Query() q: DigitalTwinListQueryDto) {
+    return this.service.findAll(q);
   }
-
-  @Get('dashboard')
-  @ApiOperation({ summary: 'Dashboard KPI de gemelos digitales por mes y año' })
-  getDashboard(@Query() query: DigitalTwinDashboardQueryDto) {
-    return this.service.getDashboard(query);
+  @Post() create(@Body() dto: CreateDigitalTwinDto, @Req() req: any) {
+    return this.service.create(dto, req.digitalTwinActor.id);
   }
-
-  @Post('refresh-all')
-  @ApiOperation({ summary: 'Recalcular snapshots KPI de todos los gemelos digitales' })
-  refreshAll(@Body() payload: DigitalTwinDashboardQueryDto) {
-    return this.service.refreshAll(payload);
+  @Get(':id/state') state(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.state(id);
   }
-
-  @Post()
-  @ApiOperation({ summary: 'Crear gemelo digital' })
-  @ApiBody({ type: CreateDigitalTwinDto })
-  create(@Body() payload: CreateDigitalTwinDto) {
-    return this.service.create(payload);
+  @Get(':id/history') history(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.history(id);
   }
-
-  @Get()
-  @ApiOperation({ summary: 'Listar gemelos digitales' })
-  findAll(@Query() query: DigitalTwinListQueryDto) {
-    return this.service.findAll(query);
-  }
-
-  @Get(':id')
-  @ApiOperation({ summary: 'Obtener gemelo digital por ID' })
-  @ApiParam({ name: 'id', description: 'UUID del gemelo digital' })
-  findOne(@Param('id') id: string) {
-    return this.service.findOne(id);
-  }
-
-  @Get(':id/detail')
-  @ApiOperation({ summary: 'Detalle operativo y KPI del gemelo digital' })
-  @ApiParam({ name: 'id', description: 'UUID del gemelo digital' })
-  getDetail(
-    @Param('id') id: string,
-    @Query() query: DigitalTwinDashboardQueryDto,
+  @Get(':id/history/:captureId') historicalState(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('captureId', ParseUUIDPipe) captureId: string,
   ) {
-    return this.service.getDetail(id, query);
+    return this.service.historicalState(id, captureId);
   }
-
-  @Post(':id/refresh')
-  @ApiOperation({ summary: 'Recalcular snapshot operativo del gemelo digital' })
-  @ApiParam({ name: 'id', description: 'UUID del gemelo digital' })
-  refresh(
-    @Param('id') id: string,
-    @Body() payload: DigitalTwinDashboardQueryDto,
+  @Post(':id/capture') capture(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
   ) {
-    return this.service.refreshTwin(id, payload.year, payload.month);
+    return this.service.capture(id, req.digitalTwinActor.id);
   }
-
-  @Post(':id/ai-analysis')
-  @ApiOperation({ summary: 'Generar análisis IA del gemelo digital' })
-  @ApiParam({ name: 'id', description: 'UUID del gemelo digital' })
-  @ApiBody({ type: DigitalTwinAiAnalysisDto })
-  aiAnalysis(
-    @Param('id') id: string,
-    @Body() payload: DigitalTwinAiAnalysisDto,
+  @Post(':id/simulate') simulate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DigitalTwinSimulationDto,
   ) {
-    return this.service.analyzeWithAi(id, payload);
+    return this.service.simulate(id, dto);
   }
-
-  @Patch(':id')
-  @ApiOperation({ summary: 'Actualizar gemelo digital' })
-  @ApiParam({ name: 'id', description: 'UUID del gemelo digital' })
-  @ApiBody({ type: UpdateDigitalTwinDto })
-  update(@Param('id') id: string, @Body() payload: UpdateDigitalTwinDto) {
-    return this.service.update(id, payload);
+  @Patch(':id') update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateDigitalTwinDto,
+    @Req() req: any,
+  ) {
+    return this.service.update(id, dto, req.digitalTwinActor.id);
   }
-
-  @Delete('purge-all')
-  @ApiOperation({ summary: 'Eliminar fisicamente todos los gemelos digitales' })
-  purgeAll(@Headers('x-role-name') roleName?: string) {
-    return this.service.purgeAll(roleName);
-  }
-
-  @Delete(':id')
-  @ApiOperation({ summary: 'Eliminar gemelo digital' })
-  @ApiParam({ name: 'id', description: 'UUID del gemelo digital' })
-  remove(@Param('id') id: string) {
-    return this.service.remove(id);
+  @Delete(':id') remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+  ) {
+    return this.service.remove(id, req.digitalTwinActor.id);
   }
 }

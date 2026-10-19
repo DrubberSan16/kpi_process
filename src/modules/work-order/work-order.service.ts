@@ -116,6 +116,9 @@ export class WorkOrderService extends CrudService<WorkOrder> {
   override async update(id: string, payload: Partial<WorkOrder>) {
     const current = await this.findOne(id);
     await this.assertWorkOrderNotBlockedByActiveAnnex(current, 'guardar o cambiar el estado de la orden');
+    if (current.equipment_location_snapshot && payload.equipment_id !== undefined && payload.equipment_id !== current.equipment_id) {
+      throw new BadRequestException('La OT ya inició su ejecución; su equipo y ubicación histórica se conservan.');
+    }
     const previousStatus = this.normalizeWorkflowStatus(current.status_workflow);
     const nextBlockedByWorkOrderId =
       payload.blocked_by_work_order_id !== undefined
