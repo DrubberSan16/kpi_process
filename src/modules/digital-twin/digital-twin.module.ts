@@ -1,6 +1,7 @@
 import { DigitalTwinAccessGuard } from './digital-twin-access.guard';
 import { DigitalTwinStateRepository } from './digital-twin-state.repository';
 import { DigitalTwinStateService } from './digital-twin-state.service';
+import { DigitalTwinAnalysisService } from './digital-twin-analysis.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import {
@@ -25,6 +26,7 @@ import { DigitalTwinService } from './digital-twin.service';
     DigitalTwinAccessGuard,
     DigitalTwinStateRepository,
     DigitalTwinStateService,
+    DigitalTwinAnalysisService,
   ],
   exports: [DigitalTwinService],
 })

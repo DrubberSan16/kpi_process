@@ -10,8 +10,10 @@ export class DigitalTwinStateRepository {
   equipment(id: string) {
     return this.db.query(
       `select e.*, m.nombre as marca, l.nombre as ubicacion, s.nombre as central,
+      (select max(h.changed_at) from kpi_maintenance.tb_equipo_horometro_historial h
+        where h.equipo_id=e.id and h.horometro_nuevo<h.horometro_anterior and h.changed_at<=now()) as last_counter_correction_at,
       (select coalesce(json_agg(x order by x.cerrada_en desc nulls last), '[]'::json) from (
-        select wo.code as work_order_code, coalesce(wo.hora_fin, wo.closed_at) as cerrada_en,
+        select wo.code as work_order_code, p.nombre as plan_nombre, coalesce(wo.hora_fin, wo.closed_at) as cerrada_en,
           coalesce(nullif(wo.valor_json->>'horometro_actual',''),nullif(wo.valor_json->>'horometro_inicio_ejecucion','')) as horometro
         from kpi_process.tb_work_order wo join kpi_maintenance.tb_plan_mantenimiento p on p.id=wo.plan_id
         where wo.equipment_id=e.id and not wo.is_deleted
@@ -32,7 +34,7 @@ export class DigitalTwinStateRepository {
   }
   components(id: string) {
     return this.db.query(
-      `select id,parent_id,codigo,nombre,nombre_oficial,serie,categoria,descripcion,orden
+      `select id,parent_id,codigo,nombre,nombre_oficial,serie,categoria,descripcion,orden,updated_at
     from kpi_maintenance.tb_equipo_componente where equipo_id=$1 and not is_deleted order by orden,nombre`,
       [id],
     );
@@ -59,9 +61,13 @@ export class DigitalTwinStateRepository {
   }
   oil(id: string) {
     return this.db.query(
-      `select id,codigo,compartimento_principal,fecha_muestra,fecha_reporte,
-    estado_diagnostico,diagnostico,lubricante from kpi_maintenance.tb_analisis_lubricante
-    where equipo_id=$1 and not is_deleted order by fecha_reporte desc nulls last,created_at desc limit 20`,
+      `select a.id,a.codigo,a.compartimento_principal,a.fecha_muestra,a.fecha_reporte,
+    a.estado_diagnostico,a.diagnostico,a.lubricante,a.payload_json,a.documento_origen,
+    coalesce((select json_agg(d order by d.orden) from (select compartimento,parametro,resultado_numerico,resultado_texto,
+      unidad,linea_base,nivel_alerta,tendencia,observacion,orden from kpi_maintenance.tb_analisis_lubricante_det
+      where analisis_id=a.id and not is_deleted) d),'[]'::json) as measurements
+    from kpi_maintenance.tb_analisis_lubricante a
+    where a.equipo_id=$1 and not a.is_deleted order by a.fecha_muestra desc nulls last,a.fecha_reporte desc nulls last,a.created_at desc limit 200`,
       [id],
     );
   }
@@ -105,7 +111,7 @@ export class DigitalTwinStateRepository {
     );
   }
 
-  simulationOrders(id: string, asOf: string) {
+  simulationOrders(id: string, asOf: string, allHistory = false) {
     return this.db.query(
       `select w.*,p.nombre as plan_name,p.requiere_parada as requires_stop,
       coalesce(w.scheduled_start::text,nullif(w.valor_json->>'fecha_programacion',''),sp.proxima_fecha::text) as schedule_reference,
@@ -121,10 +127,10 @@ export class DigitalTwinStateRepository {
         and upper(coalesce(w.status_workflow,'')) not in (${annulled})
         and upper(coalesce(w.valor_json->>'approval_action','')) not in (${annulled})
         and coalesce(jsonb_typeof(w.valor_json::jsonb->'annulment'),'') <> 'object'
-        and (upper(w.status_workflow) not in ('CLOSED','CERRADA','CERRADO')
+        and ($3::boolean or upper(w.status_workflow) not in ('CLOSED','CERRADA','CERRADO')
           or coalesce(w.hora_fin,w.closed_at) >= ($2::timestamptz at time zone 'America/Guayaquil')-interval '365 days')
       order by coalesce(w.hora_fin,w.closed_at,w.started_at,w.created_at) desc`,
-      [id, asOf],
+      [id, asOf, allHistory],
     );
   }
 

@@ -14,6 +14,7 @@ import {
 import { ApiExcludeController } from '@nestjs/swagger';
 import { DigitalTwinService } from './digital-twin.service';
 import { DigitalTwinAccessGuard } from './digital-twin-access.guard';
+import { DigitalTwinAnalysisService } from './digital-twin-analysis.service';
 import {
   CreateDigitalTwinDto,
   UpdateDigitalTwinDto,
@@ -26,7 +27,24 @@ import {
 @UseGuards(DigitalTwinAccessGuard)
 @Controller('digital-twins')
 export class DigitalTwinController {
-  constructor(private readonly service: DigitalTwinService) {}
+  constructor(
+    private readonly service: DigitalTwinService,
+    private readonly analysis: DigitalTwinAnalysisService,
+  ) {}
+  @Get(':id/analysis') async technicalAnalysis(
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.analysis.read(await this.service.findOne(id));
+  }
+  @Post(':id/analysis') async analyze(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+  ) {
+    return this.analysis.analyze(
+      await this.service.findOne(id),
+      req.digitalTwinActor.id,
+    );
+  }
   @Get('equipment-options') equipment(@Query() q: EquipmentCatalogQueryDto) {
     return this.service.getEquipmentCatalog(q.search);
   }

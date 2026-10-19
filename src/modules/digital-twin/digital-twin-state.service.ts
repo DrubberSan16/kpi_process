@@ -13,6 +13,7 @@ import {
   timestamp,
 } from './digital-twin-model';
 import { observedRate } from './digital-twin-duration';
+import { technicalEvidence, technicalQuality } from './digital-twin-technical';
 
 @Injectable()
 export class DigitalTwinStateService {
@@ -84,7 +85,7 @@ export class DigitalTwinStateService {
     const [oil, readings, operations] = await Promise.all([
       read(
         'oil',
-        'Análisis de lubricante (últimos 20)',
+        'Análisis de lubricante (últimos 200)',
         () => this.source.oil(equipment.id),
         'fecha_reporte',
       ),
@@ -115,34 +116,49 @@ export class DigitalTwinStateService {
     );
     const clock = horometer(equipment, now);
     const maintenance = maintenanceTarget(equipment, clock.estimated);
-    const measurementTime = clock.measured_at;
-    const staleReading =
-      !measurementTime ||
-      now.getTime() - Date.parse(measurementTime) > 7 * 86400000 ||
-      Date.parse(measurementTime) > now.getTime();
-    quality.unshift({
-      key: 'equipment',
-      label: 'Lectura registrada del equipo',
-      status: clock.measured === null ? 'SIN_REGISTROS' : 'DISPONIBLE',
-      latest_at: measurementTime,
-      stale: staleReading,
-      checked_at: now.toISOString(),
+    const technicalOrders = await read(
+      'technical_orders',
+      'Historial completo de OT',
+      () => this.source.simulationOrders(equipment.id, now.toISOString(), true),
+      'closed_at',
+    );
+    const technical = technicalEvidence(
+      equipment,
+      components,
+      technicalOrders,
+      oil,
+      clock,
+      now,
+    );
+    const componentOil = technical.components
+      .filter((c) => c.oil?.valid_date)
+      .map((c) => c.oil!);
+    const worstOil = [...componentOil].sort((a, b) => {
+      const severity = (s: string) =>
+        /ANORMAL|ALERTA|CRITIC/.test(s)
+          ? 2
+          : /PRECAUCI|OBSERVA/.test(s)
+            ? 1
+            : 0;
+      return severity(b.condition || '') - severity(a.condition || '');
     });
-    const oilQuality = quality.find((q) => q.key === 'oil');
-    const complete =
-      !staleReading &&
-      !clock.clock_issue &&
-      quality.every((q) => q.status !== 'NO_DISPONIBLE') &&
-      oil.length > 0 &&
-      !!oilQuality?.latest_at &&
-      !oilQuality.stale;
     const condition = evaluateCondition(
       equipment,
-      alerts,
-      oil,
+      [],
+      worstOil.map((o) => ({ estado_diagnostico: o.condition })),
       maintenance,
-      complete,
+      false,
     );
+    if (
+      worstOil[0] &&
+      condition.reasons.some((r) => r.startsWith('Lubricante:'))
+    )
+      condition.reasons.push(
+        `Hallazgo de muestra ${worstOil[0].code}; no acredita el estado físico actual`,
+      );
+    condition.basis =
+      'Ficha del equipo, horómetro automático, MPG y evidencia por compartición; sin diagnóstico físico certificado';
+    const sourceQuality = technicalQuality(equipment, technical, quality, now);
     const events = [
       ...locations.map((r) => ({
         id: `location-${r.id}`,
@@ -238,7 +254,8 @@ export class DigitalTwinStateService {
       alerts,
       orders,
       oil,
-      quality,
+      quality: sourceQuality,
+      technical,
       events,
       connection: {
         mode: 'REGISTROS_OPERATIVOS',
