@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -15,12 +16,14 @@ import { ApiExcludeController } from '@nestjs/swagger';
 import { DigitalTwinService } from './digital-twin.service';
 import { DigitalTwinAccessGuard } from './digital-twin-access.guard';
 import { DigitalTwinAnalysisService } from './digital-twin-analysis.service';
+import { DigitalTwinResearchService } from './digital-twin-research.service';
 import {
   CreateDigitalTwinDto,
   UpdateDigitalTwinDto,
   DigitalTwinListQueryDto,
   EquipmentCatalogQueryDto,
   DigitalTwinSimulationDto,
+  DigitalTwinResearchDto,
 } from './digital-twin.dto';
 
 @ApiExcludeController()
@@ -30,7 +33,24 @@ export class DigitalTwinController {
   constructor(
     private readonly service: DigitalTwinService,
     private readonly analysis: DigitalTwinAnalysisService,
+    private readonly research: DigitalTwinResearchService,
   ) {}
+  @Get(':id/research') async researchStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.research.status(await this.service.findOne(id));
+  }
+  @Post(':id/research') @HttpCode(202) async researchDocuments(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DigitalTwinResearchDto,
+    @Req() req: any,
+  ) {
+    return this.research.start(
+      await this.service.findOne(id),
+      req.digitalTwinActor.id,
+      dto.refresh === true,
+    );
+  }
   @Get(':id/analysis') async technicalAnalysis(
     @Param('id', ParseUUIDPipe) id: string,
   ) {

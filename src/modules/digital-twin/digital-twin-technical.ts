@@ -1,6 +1,7 @@
 import { numeric, timestamp } from './digital-twin-model';
 import { closedOrder, mpgOrder } from './digital-twin-duration';
 import { manufacturerReferences } from './digital-twin-manufacturer';
+import { equipmentConfiguration } from './digital-twin-research';
 
 const normalized = (v: unknown) =>
   String(v || '')
@@ -353,6 +354,7 @@ export function technicalEvidence(
   });
   return {
     as_of: now.toISOString(),
+    configuration: equipmentConfiguration(equipment, components),
     mpg,
     manufacturer,
     components: componentRows,
@@ -368,7 +370,9 @@ export function technicalEvidence(
 
 export function technicalQuality(
   equipment: any,
-  technical: ReturnType<typeof technicalEvidence>,
+  technical: ReturnType<typeof technicalEvidence> & {
+    research?: { status: string; generated_at: string | null };
+  },
   statuses: any[],
   now: Date,
 ) {
@@ -386,10 +390,19 @@ export function technicalQuality(
     },
     {
       key: 'manufacturer',
-      label: 'Manuales y fichas del fabricante',
-      status: technical.manufacturer.length ? 'INCOMPLETA' : 'SIN_REGISTROS',
-      count: technical.manufacturer.length,
-      detail: `${technical.manufacturer.length} referencias oficiales · ${technical.components.filter((c) => technical.manufacturer.some((d) => d.kind === 'MANUAL' && d.status === 'MODELO_COINCIDE' && d.scope_refs.includes(c.ref))).length} comparticiones con manual por modelo · Configuración por confirmar`,
+      label: 'Ficha técnica y manuales investigados por OpenAI',
+      status:
+        technical.research?.status === 'COMPLETE' &&
+        technical.manufacturer.some((d) => d.status === 'MODELO_COINCIDE')
+          ? 'DISPONIBLE'
+          : 'INCOMPLETA',
+      count: new Set(technical.manufacturer.map((d) => d.url)).size,
+      latest_at: technical.research?.generated_at,
+      detail:
+        technical.research?.status === 'COMPLETE' ||
+        technical.research?.status === 'STALE'
+          ? `${new Set(technical.manufacturer.map((d) => d.url)).size} documentos localizados · ${technical.components.filter((c) => technical.manufacturer.some((d) => d.kind === 'MANUAL' && d.status === 'MODELO_COINCIDE' && d.scope_refs.includes(c.ref))).length} comparticiones con manual por modelo${technical.research.status === 'STALE' ? ' · Actualizando búsqueda' : ''}`
+          : 'Búsqueda web OpenAI pendiente para la configuración del equipo',
     },
     {
       key: 'components',

@@ -6,6 +6,12 @@ const annulled = `'ANULADA','ANULADO','CANCELLED','CANCELED','CANCELADA','CANCEL
 @Injectable()
 export class DigitalTwinStateRepository {
   constructor(private readonly db: DataSource) {}
+  manufacturerResearch(id: string, hash: string) {
+    return this.db.query(
+      `select payload_json from kpi_process.tb_digital_twin_insight where digital_twin_id=$1 and insight_type='MANUFACTURER_WEB_V1' and payload_json->>'configuration_hash'=$2 and not is_deleted order by created_at desc limit 1`,
+      [id, hash],
+    );
+  }
 
   equipment(id: string) {
     return this.db.query(

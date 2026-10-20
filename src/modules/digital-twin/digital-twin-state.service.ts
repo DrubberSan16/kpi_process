@@ -14,6 +14,10 @@ import {
 } from './digital-twin-model';
 import { observedRate } from './digital-twin-duration';
 import { technicalEvidence, technicalQuality } from './digital-twin-technical';
+import {
+  applyManufacturerResearch,
+  configurationHash,
+} from './digital-twin-research';
 
 @Injectable()
 export class DigitalTwinStateService {
@@ -122,12 +126,27 @@ export class DigitalTwinStateService {
       () => this.source.simulationOrders(equipment.id, now.toISOString(), true),
       'closed_at',
     );
-    const technical = technicalEvidence(
+    const baseTechnical = technicalEvidence(
       equipment,
       components,
       technicalOrders,
       oil,
       clock,
+      now,
+    );
+    let researchReport: any = null;
+    try {
+      const [row] = await this.source.manufacturerResearch(
+        twin.id,
+        configurationHash(baseTechnical.configuration),
+      );
+      researchReport = row?.payload_json;
+    } catch {
+      this.logger.warn('Consulta documental del fabricante no disponible');
+    }
+    const technical = applyManufacturerResearch(
+      baseTechnical,
+      researchReport,
       now,
     );
     const componentOil = technical.components

@@ -13,6 +13,11 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+export class DigitalTwinResearchDto {
+  @IsOptional()
+  @IsBoolean()
+  refresh?: boolean;
+}
 
 export class CreateDigitalTwinDto {
   @ApiPropertyOptional({
